@@ -1,0 +1,4 @@
+include *.md
+include pyproject.toml
+include setup.py
+recursive-include erpnext_npdi_suite *

@@ -1,0 +1,1 @@
+erpnext_npdi_suite

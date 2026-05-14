@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribución y Empaquetado
+*.egg-info/
+build/
+dist/
+
+# Archivos de SO y Entornos de Desarrollo
+.DS_Store
+.idea/
+.vscode/
+
+# Dependencias locales (si se compilan assets Node en el futuro)
+node_modules/
