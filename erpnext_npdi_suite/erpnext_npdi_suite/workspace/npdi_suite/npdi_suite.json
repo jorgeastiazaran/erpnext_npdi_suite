@@ -1,0 +1,11 @@
+{
+ "app": "erpnext_npdi_suite",
+ "category": "Modules",
+ "content": "[{\"type\":\"shortcut\",\"data\":{\"label\":\"Dashboard\",\"link_to\":\"npdi_project_dashboard\",\"link_type\":\"Page\",\"icon\":\"project\"}},{\"type\":\"shortcut\",\"data\":{\"label\":\"Projects\",\"link_to\":\"Project\",\"link_type\":\"DocType\",\"icon\":\"project\"}},{\"type\":\"shortcut\",\"data\":{\"label\":\"Tasks\",\"link_to\":\"Task\",\"link_type\":\"DocType\",\"icon\":\"project\"}}]",
+ "doctype": "Workspace",
+ "icon": "project",
+ "is_standard": 1,
+ "label": "NPDI Suite",
+ "module": "ERPNext NPDI Suite",
+ "name": "NPDI Suite"
+}
