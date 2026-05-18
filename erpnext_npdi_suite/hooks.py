@@ -15,10 +15,13 @@ after_install = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.after_insta
 # Ganchos de documentos transaccionales
 doc_events = {
     "Task": {
-        # Dispara el recálculo CPM de todo el proyecto en segundo plano al actualizar una tarea
+        "before_validate": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_validate"],
+        "before_save": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_save"],
+        # Dispara el recálculo CPM de todo el proyecto al actualizar una tarea
         "on_update": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_task_update"]
     },
     "Project": {
+        "before_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.before_project_insert"],
         # Transfiere los atributos extendidos desde Project Template Task hacia las Tareas generadas
         "after_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_project_insert"]
     }

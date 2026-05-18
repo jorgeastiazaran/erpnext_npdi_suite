@@ -16,13 +16,20 @@ class CPMEngine:
         self.lf = {}             # Late Finish
         self.float = {}          # Holgura Total
         self.is_critical = {}    # Bool
+        self.project_end = None
 
     def load_tasks(self):
-        """Carga las tareas del proyecto y mapea la red topológica mediante depends_on nativo."""
-        task_records = frappe.get_all("Task", filters={"project": self.project_name}, fields=["name", "subject", "duration", "exp_start_date", "exp_end_date"])
+        """Carga las tareas del proyecto y mapea la red topológica y la jerarquía de grupos."""
+        task_records = frappe.get_all("Task", filters={"project": self.project_name}, fields=["name", "subject", "duration", "exp_start_date", "exp_end_date", "is_group", "parent_task"])
+        self.children = {}
         for t in task_records:
             doc = frappe.get_doc("Task", t.name)
             self.tasks[t.name] = doc
+            
+            # Construye jerarquía de padres/hijos
+            if doc.parent_task:
+                self.children.setdefault(doc.parent_task, []).append(t.name)
+                
             # Construye la red desde la tabla hija nativa 'depends_on'
             if doc.get("depends_on"):
                 for dep in doc.depends_on:
@@ -49,6 +56,7 @@ class CPMEngine:
             end_tasks = list(self.tasks.keys()) # Respaldo para redes circulares
 
         max_ef = max([self.ef[t] for t in self.tasks if t in self.ef] or [now_datetime()])
+        self.project_end = max_ef
         for t in end_tasks:
             if t in self.ef:
                 self.lf[t] = max_ef
@@ -102,6 +110,25 @@ class CPMEngine:
             return
 
         doc = self.tasks[task_name]
+        
+        # Rollup para tareas padre
+        if doc.get("is_group"):
+            children = self.children.get(task_name, [])
+            if children:
+                for child in children:
+                    self._forward_pass(child)
+                valid_es = [self.es[c] for c in children if c in self.es]
+                valid_ef = [self.ef[c] for c in children if c in self.ef]
+                self.es[task_name] = min(valid_es) if valid_es else now_datetime()
+                self.ef[task_name] = max(valid_ef) if valid_ef else self.es[task_name]
+            else:
+                self.es[task_name] = get_datetime(frappe.get_doc("Project", self.project_name).expected_start_date or now_datetime())
+                self.ef[task_name] = self.es[task_name]
+                
+            for succ in self.successors.get(task_name, []):
+                self._forward_pass(succ)
+            return
+
         if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start"):
             self.es[task_name] = get_datetime(doc.npdi_manual_start)
         else:
@@ -126,19 +153,36 @@ class CPMEngine:
         if task_name in visited:
             return
         visited.add(task_name)
-
-        successors = self.successors.get(task_name, [])
-        if not successors:
+        
+        doc = self.tasks[task_name]
+        if doc.get("is_group"):
+            children = self.children.get(task_name, [])
+            for child in children:
+                self._backward_pass(child, visited)
+            if children:
+                valid_lss = [self.ls[c] for c in children if c in self.ls]
+                valid_lfs = [self.lf[c] for c in children if c in self.lf]
+                self.ls[task_name] = min(valid_lss) if valid_lss else self.es[task_name]
+                self.lf[task_name] = max(valid_lfs) if valid_lfs else self.ef[task_name]
+            else:
+                self.ls[task_name] = self.es[task_name]
+                self.lf[task_name] = self.ef[task_name]
             return
 
+        successors = self.successors.get(task_name, [])
         for s in successors:
             self._backward_pass(s, visited)
 
-        valid_lss = [self.ls[s] for s in successors if s in self.ls]
-        if valid_lss:
-            self.lf[task_name] = min(valid_lss)
-            self.ls[task_name] = add_to_date(self.lf[task_name], hours=-self._duration_hours(task_name))
+        if successors:
+            valid_lss = [self.ls[s] for s in successors if s in self.ls]
+            if valid_lss:
+                self.lf[task_name] = min(valid_lss)
+                self.ls[task_name] = add_to_date(self.lf[task_name], hours=-self._duration_hours(task_name))
 
+        if task_name not in self.lf:
+            self.lf[task_name] = self.project_end
+            self.ls[task_name] = add_to_date(self.lf[task_name], hours=-self._duration_hours(task_name))
+        
         doc = self.tasks[task_name]
         if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_end"):
             manual_lf = get_datetime(doc.npdi_manual_end)
@@ -150,16 +194,44 @@ class CPMEngine:
             self._backward_pass(p, visited)
 
 
+def before_project_insert(doc, method):
+    """Gancho disparado antes de insertar un Proyecto para marcar la instanciación masiva."""
+    frappe.local.is_instantiating_project = True
+
+
+def task_before_validate(doc, method):
+    """Oculta temporalmente la fecha de fin para saltarse la validación estricta de Frappe."""
+    if getattr(frappe.local, 'is_instantiating_project', False):
+        if doc.parent_task and doc.exp_end_date:
+            doc.custom_hidden_exp_end_date = doc.exp_end_date
+            doc.exp_end_date = None
+
+
+def task_before_save(doc, method):
+    """Restaura la fecha de fin oculta antes de guardar en la base de datos."""
+    if getattr(frappe.local, 'is_instantiating_project', False):
+        if hasattr(doc, 'custom_hidden_exp_end_date') and doc.custom_hidden_exp_end_date:
+            doc.exp_end_date = doc.custom_hidden_exp_end_date
+
+
 def on_task_update(doc, method):
     """Gancho disparado al actualizar una tarea para propagar fechas en todo el proyecto."""
     if doc.project:
-        # Desacoplamiento para prevenir recursividad
+        # Si estamos en medio de la instanciación de un proyecto desde plantilla, ignoramos esto por completo
+        # para evitar 60 recálculos CPM síncronos que provocan un bloqueo o timeout en la interfaz
+        if getattr(frappe.local, 'is_instantiating_project', False):
+            return
+
+        # Desacoplamiento para prevenir recursividad cuando CPM llama a db_set
         if getattr(frappe.local, 'cpm_processing', False):
             return
+            
         frappe.local.cpm_processing = True
         try:
             engine = CPMEngine(doc.project)
             engine.compute()
+        except Exception as e:
+            frappe.log_error(f"Error CPM en on_task_update: {str(e)}", "NPD CPM Error")
         finally:
             frappe.local.cpm_processing = False
 
@@ -178,15 +250,33 @@ def on_project_insert(doc, method):
     task_map = {t.subject: t.name for t in generated_tasks}
 
     for tmpl in template_tasks:
-        target_task_name = task_map.get(tmpl.task)
+        tmpl_data = frappe.db.get_value("Task", tmpl.task, ["subject", "duration"], as_dict=True)
+        if not tmpl_data:
+            continue
+        tmpl_subject = tmpl_data.subject
+        duration = tmpl_data.duration or 0
+        target_task_name = task_map.get(tmpl_subject)
         if target_task_name:
             frappe.db.set_value("Task", target_task_name, {
+                "duration": duration,
                 "npdi_stage_name": tmpl.npdi_stage_name,
                 "npdi_module": tmpl.npdi_module or "Core",
                 "npdi_responsible_role": tmpl.npdi_responsible_role,
                 "npdi_requires_attachment": tmpl.npdi_requires_attachment,
                 "npdi_launch_milestone": tmpl.npdi_launch_milestone
             })
+
+    # Como hemos bloqueado on_task_update durante la instanciación, ejecutamos el motor CPM sincronamente AHORA
+    # Esto ocurre una sola vez, y es extremadamente rápido, por lo que no bloqueará la UI
+    try:
+        frappe.local.cpm_processing = True
+        engine = CPMEngine(doc.name)
+        engine.compute()
+    except Exception as e:
+        frappe.log_error(f"Error al calcular CPM al insertar proyecto: {str(e)}", "NPD CPM Error")
+    finally:
+        frappe.local.cpm_processing = False
+        frappe.local.is_instantiating_project = False
 
 
 @frappe.whitelist()
