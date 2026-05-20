@@ -46,7 +46,10 @@ export default function GanttView({
 
   const computedGanttHeight = isFullscreen ? Math.max(400, windowHeight - 120) : Math.max(500, windowHeight - 400);
 
-  const router = useRouter();
+  const [ganttKey, setGanttKey] = useState(0);
+  const router = useMemo(() => ({
+    refresh: () => setGanttKey(prev => prev + 1)
+  }), []);
 
   // Auto-scroll to selected task
   React.useEffect(() => {
@@ -461,6 +464,7 @@ export default function GanttView({
       
       <div style={{ padding: '1px', flex: isFullscreen ? 1 : 'none', overflowY: isFullscreen ? 'auto' : 'visible' }}>
         <Gantt
+          key={ganttKey}
           tasks={ganttTasks}
           viewMode={viewMode}
           onDateChange={handleTaskChange}

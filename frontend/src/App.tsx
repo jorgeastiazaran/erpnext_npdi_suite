@@ -7,16 +7,14 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
-  useEffect(() => {
+  const fetchTasks = () => {
     let projectName: string | null = null;
     let templateName: string | null = null;
 
-    // Call Frappe API to fetch tasks
     // @ts-ignore
     if (window.frappe && window.frappe.get_route) {
       // @ts-ignore
       const route = window.frappe.get_route();
-      // route is typically ["npdi_project_dashboard", "Project", "PROJ-0001"]
       if (route.length >= 3) {
         if (route[1] === "Project") projectName = route[2];
         else if (route[1] === "Project Template") templateName = route[2];
@@ -29,7 +27,6 @@ function App() {
       return;
     }
 
-    // Call Frappe API to fetch tasks
     // @ts-ignore
     if (window.frappe) {
       // @ts-ignore
@@ -46,12 +43,15 @@ function App() {
         }
       });
     } else {
-      // Mock data for local testing outside Frappe
       setTimeout(() => {
         setTasks([]);
         setLoading(false);
       }, 1000);
     }
+  };
+
+  useEffect(() => {
+    fetchTasks();
   }, []);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Cargando Cronograma...</div>;
@@ -72,6 +72,9 @@ function App() {
           method: "erpnext_npdi_suite.api.update_task_status",
           args: { task_id: taskId, status: status },
           callback: function(r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            }
             resolve(r.message || {success: false});
           }
         });
@@ -90,6 +93,11 @@ function App() {
           method: "erpnext_npdi_suite.api.update_task_dates",
           args: { task_id: taskId, start: start.toISOString(), end: end.toISOString() },
           callback: function(r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            } else {
+              fetchTasks();
+            }
             resolve(r.message || {success: false});
           }
         });
