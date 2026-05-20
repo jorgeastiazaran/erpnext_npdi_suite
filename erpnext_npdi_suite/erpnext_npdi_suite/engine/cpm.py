@@ -143,8 +143,11 @@ class CPMEngine:
                 valid_efs = [self.ef[p] for p in preds if p in self.ef]
                 self.es[task_name] = max(valid_efs) if valid_efs else now_datetime()
 
-        duration = self._duration_hours(task_name)
-        self.ef[task_name] = add_to_date(self.es[task_name], hours=duration)
+        if doc.get("status") == "Completed" and doc.get("completed_on"):
+            self.ef[task_name] = get_datetime(doc.completed_on)
+        else:
+            duration = self._duration_hours(task_name)
+            self.ef[task_name] = add_to_date(self.es[task_name], hours=duration)
 
         for succ in self.successors.get(task_name, []):
             self._forward_pass(succ)

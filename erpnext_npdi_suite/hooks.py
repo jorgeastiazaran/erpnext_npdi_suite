@@ -26,3 +26,9 @@ doc_events = {
         "after_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_project_insert"]
     }
 }
+
+# Custom Scripts Injected into Standard UI
+doctype_js = {
+    "Project": "public/js/project.js",
+    "Project Template": "public/js/project_template.js"
+}

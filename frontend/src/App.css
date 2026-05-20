@@ -1,0 +1,7 @@
+.gantt-container [class*="taskList"] { 
+  background-color: var(--bg-surface) !important; 
+  color: var(--text-primary) !important; 
+}
+.gantt-container svg text { 
+  fill: var(--text-primary) !important; 
+}
