@@ -3,9 +3,10 @@ import GanttView from './GanttView'
 import './App.css'
 
 function App() {
-  const [tasks, setTasks] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const fetchTasks = () => {
     let projectName: string | null = null;
@@ -52,6 +53,23 @@ function App() {
 
   useEffect(() => {
     fetchTasks();
+
+    // Lógica para detectar y observar el tema activo de ERPNext / Frappe
+    const checkTheme = () => {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+                     document.documentElement.getAttribute('data-color-scheme') === 'dark' ||
+                     document.documentElement.classList.contains('dark') ||
+                     document.body.classList.contains('dark');
+      setTheme(isDark ? 'dark' : 'light');
+    };
+
+    checkTheme();
+
+    const observer = new MutationObserver(checkTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-color-scheme', 'class'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    return () => observer.disconnect();
   }, []);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Cargando Cronograma...</div>;
@@ -121,8 +139,8 @@ function App() {
   };
 
   return (
-    <div style={{ padding: '20px' }}>
-      <h2 style={{ marginBottom: '20px' }}>NPDI Project Timeline</h2>
+    <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
+      <h2 style={{ marginBottom: '20px', color: 'var(--text-h)' }}>NPDI Project Timeline</h2>
       <GanttView 
         tasks={tasks} 
         onTaskClick={handleTaskClick}

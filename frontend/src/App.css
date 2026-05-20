@@ -12,3 +12,39 @@
 .gantt-container svg text { 
   fill: var(--text-primary) !important; 
 }
+
+/* Dark Mode overrides for gantt-task-react SVG components */
+.theme-dark rect[class*="_2dZTy"] {
+  fill: var(--bg-surface) !important;
+}
+.theme-dark rect[class*="_2dZTy"]:nth-child(even) {
+  fill: var(--bg-surface-2) !important;
+}
+.theme-dark line[class*="_3rUKi"],
+.theme-dark line[class*="_RuwuK"],
+.theme-dark line[class*="_1rLuZ"] {
+  stroke: var(--border) !important;
+}
+.theme-dark rect[class*="_35nLX"] {
+  fill: var(--bg-surface-2) !important;
+  stroke: var(--border) !important;
+}
+.theme-dark text[class*="_9w8d5"],
+.theme-dark text[class*="_2q1Kt"],
+.theme-dark text[class*="_3KcaM"] {
+  fill: var(--text-primary) !important;
+}
+
+/* Row backgrounds in the TaskList (table sidebar) */
+.theme-dark div[class*="_3ZbQT"],
+.theme-dark div[class*="_3_ygE"] {
+  border-color: var(--border) !important;
+}
+.theme-dark div[class*="_34SS0"] {
+  border-color: var(--border) !important;
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+}
+.theme-dark div[class*="_34SS0"]:nth-of-type(even) {
+  background-color: var(--bg-surface-2) !important;
+}
