@@ -166,6 +166,15 @@ class CPMEngine:
 
         doc = self.tasks[task_name]
         
+        # Si la tarea está Completada, fijar sus fechas al estado actual guardado
+        # Esto evita inconsistencias si se reabre un predecesor
+        if doc.get("status") == "Completed":
+            self.es[task_name] = get_datetime(doc.exp_start_date or now_datetime())
+            self.ef[task_name] = get_datetime(doc.completed_on or doc.exp_end_date or now_datetime())
+            for succ in self.successors.get(task_name, []):
+                self._forward_pass(succ)
+            return
+        
         # Rollup para tareas padre
         if doc.get("is_group"):
             children = self.children.get(task_name, [])
