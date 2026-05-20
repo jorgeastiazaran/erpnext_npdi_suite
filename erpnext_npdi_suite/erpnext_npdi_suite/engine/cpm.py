@@ -37,11 +37,60 @@ class CPMEngine:
                         self.predecessors[t.name].append(dep.task)
                         self.successors[dep.task].append(t.name)
 
+    def resolve_group_statuses(self):
+        """Resuelve recursivamente el estatus de las tareas grupo basándose en sus hijos."""
+        groups = [t for t, doc in self.tasks.items() if doc.is_group]
+        evaluated = {}
+
+        def evaluate_group(group_name):
+            if group_name in evaluated:
+                return evaluated[group_name]
+            
+            children = self.children.get(group_name, [])
+            if not children:
+                evaluated[group_name] = self.tasks[group_name].status
+                return evaluated[group_name]
+            
+            children_statuses = []
+            children_completed_ons = []
+            for child in children:
+                child_doc = self.tasks[child]
+                if child_doc.is_group:
+                    status = evaluate_group(child)
+                else:
+                    status = child_doc.status
+                children_statuses.append(status)
+                if status == 'Completed' and child_doc.completed_on:
+                    children_completed_ons.append(get_datetime(child_doc.completed_on))
+            
+            group_doc = self.tasks[group_name]
+            if children_statuses and all(s == 'Completed' for s in children_statuses):
+                if group_doc.status != 'Completed':
+                    group_doc.status = 'Completed'
+                    if children_completed_ons:
+                        group_doc.completed_on = max(children_completed_ons).date()
+                    else:
+                        group_doc.completed_on = frappe.utils.nowdate()
+                evaluated[group_name] = 'Completed'
+            else:
+                if group_doc.status == 'Completed':
+                    group_doc.status = 'Working'
+                    group_doc.completed_on = None
+                evaluated[group_name] = group_doc.status
+                
+            return evaluated[group_name]
+
+        for g in groups:
+            evaluate_group(g)
+
     def compute(self):
         """Ejecuta las pasadas hacia adelante y hacia atrás, respetando fechas manuales."""
         self.load_tasks()
         if not self.tasks:
             return
+
+        # Resolver los estatus de los grupos basándose en sus hijos
+        self.resolve_group_statuses()
 
         # Nodos iniciales (sin predecesores)
         start_tasks = [t for t in self.tasks if not self.predecessors.get(t)]
@@ -83,8 +132,8 @@ class CPMEngine:
                 ls_val = self.ls.get(task_name, es_val)
                 lf_val = self.lf.get(task_name, ef_val)
                 
-                # Actualiza campos custom y nativos en bloque
-                doc.db_set({
+                # Actualiza campos en bloque
+                db_updates = {
                     "npdi_cpm_early_start": es_val,
                     "npdi_cpm_early_finish": ef_val,
                     "npdi_cpm_late_start": ls_val,
@@ -94,7 +143,13 @@ class CPMEngine:
                     # Actualiza fechas nativas para alinear el diagrama SVG estándar
                     "exp_start_date": es_val.date(),
                     "exp_end_date": ef_val.date()
-                })
+                }
+
+                if doc.is_group:
+                    db_updates["status"] = doc.status
+                    db_updates["completed_on"] = doc.completed_on
+
+                doc.db_set(db_updates)
 
     def _duration_hours(self, task_name):
         doc = self.tasks[task_name]
