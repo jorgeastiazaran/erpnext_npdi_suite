@@ -119,7 +119,7 @@ class CPMEngine:
         for t in self.tasks:
             if t in self.ls and t in self.es:
                 self.float[t] = (self.ls[t] - self.es[t]).total_seconds() / 3600.0
-                self.is_critical[t] = abs(self.float[t]) < 0.1
+                self.is_critical[t] = self.float[t] <= 0.1
             else:
                 self.float[t] = 0.0
                 self.is_critical[t] = False
