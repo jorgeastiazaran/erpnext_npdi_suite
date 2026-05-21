@@ -130,6 +130,20 @@ export default function GanttView({
 
   // Map our tasks to gantt-task-react format
   const ganttTasks: Task[] = useMemo(() => {
+    // Recursive children helper
+    const getRecursiveChildren = (parentId: string | number): any[] => {
+      let result: any[] = [];
+      const directChildren = tasks.filter(child => child.parentTaskId === parentId);
+      for (const child of directChildren) {
+        result.push(child);
+        const childHasChildren = tasks.some(c => c.parentTaskId === child.id);
+        if (childHasChildren) {
+          result = result.concat(getRecursiveChildren(child.id));
+        }
+      }
+      return result;
+    };
+
     const grouped = tasks.reduce((acc, t) => {
       const stage = t.stageName || 'General';
       if (!acc[stage]) acc[stage] = [];
@@ -149,20 +163,37 @@ export default function GanttView({
       const stageStart = new Date(Math.min(...sortedStageTasks.map(t => new Date(t.planStartDate).getTime())));
       const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => new Date(t.planEndDate).getTime())));
 
+      // Calculate stage status colors dynamically based on child tasks
+      const hasStageAnyStarted = sortedStageTasks.some(t => {
+        const s = t.status?.toLowerCase();
+        return s === 'completed' || s === 'working' || s === 'in progress' || s === 'blocked' || s === 'awaiting approval';
+      });
+      const isStageCompleted = sortedStageTasks.every(t => t.status === 'Completed');
+      
+      let stageStatusColor = '#9ca3af'; // gray
+      let stageProgress = 0;
+      if (isStageCompleted) {
+        stageStatusColor = '#22c55e'; // green
+        stageProgress = 100;
+      } else if (hasStageAnyStarted) {
+        stageStatusColor = 'var(--accent)'; // blue
+        stageProgress = 50;
+      }
+
       finalTasks.push({
         id: stageId,
         name: stageName.toUpperCase(),
         start: stageStart,
         end: stageEnd,
-        progress: sortedStageTasks.every(t => t.status === 'Completed') ? 100 : 0,
+        progress: stageProgress,
         type: 'project',
         hideChildren: collapsedIds.has(stageId),
         displayOrder: currentDisplayOrder++,
         styles: {
-          backgroundColor: 'rgba(0, 0, 0, 0.05)',
-          backgroundSelectedColor: 'rgba(0, 0, 0, 0.1)',
-          progressColor: 'var(--accent)',
-          progressSelectedColor: 'var(--accent)',
+          backgroundColor: stageStatusColor,
+          backgroundSelectedColor: stageStatusColor,
+          progressColor: stageStatusColor,
+          progressSelectedColor: stageStatusColor,
         }
       });
 
@@ -192,20 +223,50 @@ export default function GanttView({
           else if (stage.includes('post')) barColor = 'var(--status-post-text)';
         }
 
+        let taskProgress = 0;
+        let finalBarColor = barColor;
+        let finalBgColor = 'rgba(0,0,0,0.05)';
+        
+        if (hasChildren) {
+          const childTasks = getRecursiveChildren(t.id);
+          const isAllCompleted = childTasks.length > 0 && childTasks.every(c => c.status?.toLowerCase() === 'completed');
+          const isAnyStarted = childTasks.some(c => {
+            const s = c.status?.toLowerCase();
+            return s === 'completed' || s === 'working' || s === 'in progress' || s === 'blocked' || s === 'awaiting approval';
+          });
+          
+          if (isAllCompleted) {
+            finalBarColor = '#22c55e'; // Green
+            taskProgress = 100;
+          } else if (isAnyStarted) {
+            finalBarColor = 'var(--accent)'; // Blue
+            taskProgress = 50;
+          } else {
+            finalBarColor = '#9ca3af'; // Gray
+            taskProgress = 0;
+          }
+          finalBgColor = finalBarColor;
+        } else {
+          taskProgress = status === 'completed' ? 100 : (status === 'in progress' ? 50 : 0);
+          finalBarColor = barColor;
+          finalBgColor = status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)';
+        }
+
         finalTasks.push({
           id: t.id.toString(),
           name: isCritical && status !== 'completed' ? `🔥 ${t.name}` : t.name,
           start: new Date(t.planStartDate),
           end: new Date(t.planEndDate),
-          progress: status === 'completed' ? 100 : (status === 'in progress' ? 50 : 0),
+          progress: taskProgress,
           type: t.isMilestone ? 'milestone' : (hasChildren ? 'project' : 'task'),
           project: parentId,
           hideChildren: collapsedIds.has(t.id.toString()),
           dependencies: dependencyIds,
           styles: {
-            progressColor: barColor,
-            progressSelectedColor: barColor,
-            backgroundColor: status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
+            progressColor: finalBarColor,
+            progressSelectedColor: finalBarColor,
+            backgroundColor: finalBgColor,
+            backgroundSelectedColor: finalBgColor,
           },
           displayOrder: currentDisplayOrder++,
           isDisabled: t.isSkipped,
