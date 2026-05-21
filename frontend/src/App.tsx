@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import GanttView from './GanttView'
+import ListView from './ListView'
+import { Calendar, List } from 'lucide-react'
 import './App.css'
 
 function App() {
@@ -7,6 +9,7 @@ function App() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<'gantt' | 'list'>('gantt');
   
   const fetchTasks = () => {
     let projectName: string | null = null;
@@ -125,29 +128,205 @@ function App() {
     });
   };
 
-  const handleAddQuickTask = (stageName: string, parentTaskId: string | null) => {
+  const handleAddQuickTask = (
+    stageName: string,
+    parentTaskId: string | null,
+    inheritedData?: {
+      dependencies?: string[];
+      startDate?: string;
+      npdiModule?: string;
+    }
+  ) => {
     // @ts-ignore
     if (window.frappe) {
-      // Open standard quick entry or new form for Task
-      // @ts-ignore
-      frappe.new_doc('Task', {
+      if (inheritedData) {
+        // @ts-ignore
+        window.npdi_subtask_inheritance = {
+          startDate: inheritedData.startDate,
+          dependencies: inheritedData.dependencies
+        };
+      }
+
+      const docAttrs: any = {
         project: new URLSearchParams(window.location.search).get('project') || window.frappe.get_route()[2],
         npdi_stage_name: stageName,
         parent_task: parentTaskId
-      });
+      };
+
+      if (inheritedData && inheritedData.npdiModule) {
+        docAttrs.npdi_module = inheritedData.npdiModule;
+      }
+
+      // @ts-ignore
+      frappe.new_doc('Task', docAttrs);
     }
+  };
+  const handleDeleteTask = async (taskId: string) => {
+    return new Promise((resolve) => {
+      // @ts-ignore
+      if (window.frappe) {
+        // @ts-ignore
+        frappe.call({
+          method: "erpnext_npdi_suite.api.delete_task",
+          args: { task_id: taskId },
+          callback: function(r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            } else {
+              alert(r.message?.error || "Error al eliminar la tarea.");
+            }
+            resolve(r.message || {success: false});
+          }
+        });
+      } else {
+        // Mock fallback
+        setTasks(prev => prev.filter(t => t.id !== taskId));
+        resolve({success: true});
+      }
+    });
+  };
+
+  const handleAddTaskDependency = async (taskId: string, dependsOnId: string) => {
+    return new Promise((resolve) => {
+      // @ts-ignore
+      if (window.frappe) {
+        // @ts-ignore
+        frappe.call({
+          method: "erpnext_npdi_suite.api.add_task_dependency",
+          args: { task_id: taskId, depends_on: dependsOnId },
+          callback: function(r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            } else {
+              alert(r.message?.error || "Error al agregar dependencia.");
+            }
+            resolve(r.message || {success: false});
+          }
+        });
+      } else {
+        // Mock fallback
+        setTasks(prev => prev.map(t => {
+          if (t.id === taskId) {
+            const deps = t.dependencies ? [...t.dependencies] : [];
+            deps.push({ dependentOnId: dependsOnId });
+            return { ...t, dependencies: deps };
+          }
+          return t;
+        }));
+        resolve({success: true});
+      }
+    });
+  };
+
+  const handleSkipTask = async (taskId: string, isSkip: boolean) => {
+    return new Promise((resolve) => {
+      // @ts-ignore
+      if (window.frappe) {
+        // @ts-ignore
+        frappe.call({
+          method: "erpnext_npdi_suite.api.update_task_status",
+          args: { task_id: taskId, status: isSkip ? 'Cancelled' : 'Open' },
+          callback: function(r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            } else {
+              alert(r.message?.error || "Error al actualizar la tarea.");
+            }
+            resolve(r.message || {success: false});
+          }
+        });
+      } else {
+        setTasks(prev => prev.map(t => {
+          if (t.id === taskId) {
+            return { ...t, isSkipped: isSkip, status: isSkip ? 'Cancelled' : 'Open' };
+          }
+          return t;
+        }));
+        resolve({success: true});
+      }
+    });
   };
 
   return (
     <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
-      <h2 style={{ marginBottom: '20px', color: 'var(--text-h)' }}>NPDI Project Timeline</h2>
-      <GanttView 
-        tasks={tasks} 
-        onTaskClick={handleTaskClick}
-        onStatusChange={handleStatusChange}
-        onDateChange={handleDateChange}
-        onAddQuickTask={handleAddQuickTask}
-      />
+      
+      {/* Header and Switcher Section */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <h2 style={{ margin: 0, color: 'var(--text-h)' }}>NPDI Project Timeline</h2>
+        
+        {/* Premium View Switcher Button Group */}
+        <div style={{ 
+          display: 'flex', 
+          background: 'var(--bg-surface-2)', 
+          border: '1px solid var(--border)', 
+          borderRadius: '8px', 
+          padding: '2px', 
+          boxShadow: 'var(--shadow)' 
+        }}>
+          <button
+            onClick={() => setActiveView('gantt')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              border: 'none',
+              borderRadius: '6px',
+              background: activeView === 'gantt' ? 'var(--accent)' : 'transparent',
+              color: activeView === 'gantt' ? '#ffffff' : 'var(--text)',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              fontFamily: 'var(--sans)',
+            }}
+          >
+            <Calendar size={14} />
+            Cronograma
+          </button>
+          <button
+            onClick={() => setActiveView('list')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              border: 'none',
+              borderRadius: '6px',
+              background: activeView === 'list' ? 'var(--accent)' : 'transparent',
+              color: activeView === 'list' ? '#ffffff' : 'var(--text)',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              fontFamily: 'var(--sans)',
+            }}
+          >
+            <List size={14} />
+            Vista de Lista
+          </button>
+        </div>
+      </div>
+
+      {activeView === 'gantt' ? (
+        <GanttView 
+          tasks={tasks} 
+          onTaskClick={handleTaskClick}
+          onStatusChange={handleStatusChange}
+          onDateChange={handleDateChange}
+          onAddQuickTask={handleAddQuickTask}
+        />
+      ) : (
+        <ListView 
+          tasks={tasks} 
+          onTaskClick={handleTaskClick}
+          onStatusChange={handleStatusChange}
+          onAddQuickTask={handleAddQuickTask}
+          onDeleteQuickTask={handleDeleteTask}
+          onAddTaskDependency={handleAddTaskDependency}
+          onSkipTask={handleSkipTask}
+        />
+      )}
     </div>
   )
 }

@@ -151,6 +151,20 @@ class CPMEngine:
 
                 doc.db_set(db_updates)
 
+        # Update parent Project expected_end_date from the latest stage-gate milestone
+        milestone_dates = []
+        for task_name, doc in self.tasks.items():
+            if task_name in self.ef:
+                subject = (doc.get("subject") or "").lower()
+                if (doc.get("is_milestone") == 1 or 
+                    doc.get("npdi_launch_milestone") == 1 or 
+                    "stage-gate" in subject):
+                    milestone_dates.append(self.ef[task_name].date())
+
+        if milestone_dates:
+            latest_milestone_date = max(milestone_dates)
+            frappe.db.set_value("Project", self.project_name, "expected_end_date", latest_milestone_date)
+
     def _duration_hours(self, task_name):
         doc = self.tasks[task_name]
         if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start") and doc.get("npdi_manual_end"):

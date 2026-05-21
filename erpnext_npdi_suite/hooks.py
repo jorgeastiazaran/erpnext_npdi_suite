@@ -30,5 +30,6 @@ doc_events = {
 # Custom Scripts Injected into Standard UI
 doctype_js = {
     "Project": "public/js/project.js",
-    "Project Template": "public/js/project_template.js"
+    "Project Template": "public/js/project_template.js",
+    "Task": "public/js/task.js"
 }
