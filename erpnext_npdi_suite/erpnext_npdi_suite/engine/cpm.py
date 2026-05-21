@@ -351,7 +351,24 @@ def on_project_insert(doc, method):
                 "npdi_launch_milestone": tmpl.npdi_launch_milestone
             })
 
+    # Poblar el campo 'subject' en las filas de Task Depends On para que la tabla
+    # muestre el nombre de la tarea en lugar del ID
+    subject_map = {t.name: t.subject for t in generated_tasks}
+    dep_rows = frappe.db.sql("""
+        SELECT tdo.name, tdo.task
+        FROM `tabTask Depends On` tdo
+        JOIN `tabTask` t ON t.name = tdo.parent
+        WHERE t.project = %s AND (tdo.subject IS NULL OR tdo.subject = '')
+          AND tdo.task IS NOT NULL AND tdo.task != ''
+    """, (doc.name,), as_dict=True)
+    for dep_row in dep_rows:
+        dep_subject = subject_map.get(dep_row.task) or frappe.db.get_value("Task", dep_row.task, "subject")
+        if dep_subject:
+            frappe.db.sql("UPDATE `tabTask Depends On` SET subject = %s WHERE name = %s",
+                          (dep_subject, dep_row.name))
+
     # Como hemos bloqueado on_task_update durante la instanciación, ejecutamos el motor CPM sincronamente AHORA
+
     # Esto ocurre una sola vez, y es extremadamente rápido, por lo que no bloqueará la UI
     try:
         frappe.local.cpm_processing = True
