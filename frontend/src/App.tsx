@@ -3,6 +3,7 @@ import GanttView from './GanttView'
 import ListView from './ListView'
 import { Calendar, List } from 'lucide-react'
 import './App.css'
+import { toISODateString } from './dateUtils'
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -112,7 +113,7 @@ function App() {
         // @ts-ignore
         frappe.call({
           method: "erpnext_npdi_suite.api.update_task_dates",
-          args: { task_id: taskId, start: start.toISOString(), end: end.toISOString() },
+          args: { task_id: taskId, start: toISODateString(start), end: toISODateString(end) },
           callback: function(r: any) {
             if (r.message && r.message.success) {
               fetchTasks();

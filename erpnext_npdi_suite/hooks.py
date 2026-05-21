@@ -23,7 +23,7 @@ doc_events = {
     "Project": {
         "before_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.before_project_insert"],
         # Transfiere los atributos extendidos desde Project Template Task hacia las Tareas generadas
-        "after_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_project_insert"]
+        "on_update": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_project_insert"]
     }
 }
 

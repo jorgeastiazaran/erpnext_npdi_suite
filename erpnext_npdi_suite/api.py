@@ -20,7 +20,7 @@ def get_project_gantt_data(project=None, template=None):
         fields=[
             'name as id', 'subject as name', 'exp_start_date as planStartDate',
             'exp_end_date as planEndDate', 'status', 'parent_task as parentTaskId',
-            'is_group as isMilestone', 'npdi_stage_name as stageName',
+            'is_milestone as isMilestone', 'is_group as isGroup', 'npdi_stage_name as stageName',
             'npdi_module as npdiModule',
             'npdi_cpm_is_critical as isCritical', 'npdi_cpm_total_float as slack',
             'npdi_baseline_start as baselineStartDate', 'npdi_baseline_end as baselineEndDate',
@@ -67,6 +67,8 @@ def get_project_gantt_data(project=None, template=None):
         t['planStartDate'] = str(t['planStartDate'])
         t['planEndDate'] = str(t['planEndDate'])
         t['isCritical'] = bool(t.get('isCritical'))
+        t['isGroup'] = bool(t.get('isGroup'))
+        t['isMilestone'] = bool(t.get('isMilestone'))
         t['slack'] = float(t.get('slack') or 0.0)
 
         if t.get('baselineStartDate'):

@@ -20,6 +20,7 @@ import {
   Flag
 } from 'lucide-react';
 import './ListView.css';
+import { parseLocalDate, toISODateString } from './dateUtils';
 
 interface ListViewProps {
   tasks: any[];
@@ -321,7 +322,7 @@ export default function ListView({
   // Date Formatter
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
-    const d = new Date(dateString);
+    const d = parseLocalDate(dateString);
     if (isNaN(d.getTime())) return dateString;
     const day = d.getDate().toString().padStart(2, '0');
     const month = d.toLocaleDateString('es-ES', { month: 'short' }).replace('.', '').toLowerCase();
@@ -332,8 +333,8 @@ export default function ListView({
   // Calculate Duration in Days
   const getDuration = (startStr: string, endStr: string) => {
     if (!startStr || !endStr) return 0;
-    const start = new Date(startStr);
-    const end = new Date(endStr);
+    const start = parseLocalDate(startStr);
+    const end = parseLocalDate(endStr);
     const diffTime = Math.abs(end.getTime() - start.getTime());
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
   };
@@ -354,7 +355,7 @@ export default function ListView({
     
     const now = new Date();
     now.setHours(0,0,0,0);
-    const planEnd = task.planEndDate ? new Date(task.planEndDate) : new Date();
+    const planEnd = task.planEndDate ? parseLocalDate(task.planEndDate) : new Date();
     planEnd.setHours(0,0,0,0);
     const isOverdue = task.status !== 'Completed' && task.status !== 'Cancelled' && task.status !== 'Overdue' && task.status !== 'Blocked' && planEnd < now;
     const overdueDays = isOverdue ? Math.round((now.getTime() - planEnd.getTime()) / (1000 * 60 * 60 * 24)) : 0;
@@ -800,12 +801,12 @@ export default function ListView({
             let durationLabel = '';
             
             if (validDates.length > 0) {
-              const startDates = validDates.map(t => new Date(t.planStartDate).getTime());
-              const endDates = validDates.map(t => new Date(t.planEndDate).getTime());
+              const startDates = validDates.map(t => parseLocalDate(t.planStartDate).getTime());
+              const endDates = validDates.map(t => parseLocalDate(t.planEndDate).getTime());
               const minStart = new Date(Math.min(...startDates));
               const maxEnd = new Date(Math.max(...endDates));
               
-              dateLabel = `${formatDate(minStart.toISOString())} - ${formatDate(maxEnd.toISOString())}`;
+              dateLabel = `${formatDate(toISODateString(minStart))} - ${formatDate(toISODateString(maxEnd))}`;
               
               const diff = Math.round((maxEnd.getTime() - minStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
               if (diff >= 30) {

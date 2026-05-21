@@ -13,6 +13,7 @@ const useRouter = () => ({ refresh: () => window.location.reload() });
 const updateTaskDates = async () => ({ success: false, error: 'API no implementada' });
 
 import { Check, AlertCircle, ChevronDown, Maximize2, Minimize2, Target, Plus, Trash2, Maximize, Minimize } from 'lucide-react';
+import { parseLocalDate } from './dateUtils';
 
 interface GanttViewProps {
   tasks: any[]; // The tasks from our scheduler/Prisma
@@ -171,8 +172,8 @@ export default function GanttView({
 
       if (sortedStageTasks.length === 0) return;
 
-      const stageStart = new Date(Math.min(...sortedStageTasks.map(t => new Date(t.planStartDate).getTime())));
-      const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => new Date(t.planEndDate).getTime())));
+      const stageStart = new Date(Math.min(...sortedStageTasks.map(t => parseLocalDate(t.planStartDate).getTime())));
+      const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => parseLocalDate(t.planEndDate).getTime())));
 
       // Calculate stage status colors dynamically based on child tasks
       const hasStageAnyStarted = sortedStageTasks.some(t => {
@@ -266,13 +267,13 @@ export default function GanttView({
         finalTasks.push({
           id: t.id.toString(),
           name: isCritical && status !== 'completed' ? `🔥 ${t.name}` : t.name,
-          start: new Date(t.planStartDate),
-          end: new Date(t.planEndDate),
+          start: parseLocalDate(t.planStartDate),
+          end: parseLocalDate(t.planEndDate),
           progress: taskProgress,
-          type: t.isMilestone ? 'milestone' : (hasChildren ? 'project' : 'task'),
+          type: t.isMilestone ? 'milestone' : ((hasChildren || t.isGroup) ? 'project' : 'task'),
           project: parentId,
           hideChildren: collapsedIds.has(t.id.toString()),
-          dependencies: dependencyIds,
+          dependencies: (hasChildren || t.isGroup) ? [] : dependencyIds,
           styles: {
             progressColor: finalBarColor,
             progressSelectedColor: finalBarColor,
@@ -294,8 +295,8 @@ export default function GanttView({
           finalTasks.push({
             id: `baseline-${t.id}`,
             name: `[Base] ${t.name}`,
-            start: new Date(t.baselineStartDate),
-            end: new Date(t.baselineEndDate),
+            start: parseLocalDate(t.baselineStartDate),
+            end: parseLocalDate(t.baselineEndDate),
             progress: 100,
             type: 'task',
             project: parentId,
@@ -343,9 +344,9 @@ export default function GanttView({
       
       if (originalTask) {
         // Normalize dates to mid-night for safe comparison to avoid timezone shift issues during drag
-        const originalStart = new Date(originalTask.planStartDate);
+        const originalStart = parseLocalDate(originalTask.planStartDate);
         originalStart.setHours(0, 0, 0, 0);
-        const newStart = new Date(task.start);
+        const newStart = parseLocalDate(task.start);
         newStart.setHours(0, 0, 0, 0);
 
         if (originalStart.getTime() !== newStart.getTime() && !originalTask.isFixed) {

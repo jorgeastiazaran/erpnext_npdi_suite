@@ -319,7 +319,11 @@ def on_task_update(doc, method):
 
 def on_project_insert(doc, method):
     """Gancho disparado al instanciar un Proyecto para heredar atributos custom desde Project Template Task."""
+    if not getattr(frappe.local, 'is_instantiating_project', False):
+        return
+
     if not doc.project_template:
+        frappe.local.is_instantiating_project = False
         return
         
     template_tasks = frappe.get_all("Project Template Task", filters={"parent": doc.project_template}, fields=["task", "npdi_stage_name", "npdi_module", "npdi_responsible_role", "npdi_requires_attachment", "npdi_launch_milestone"])
