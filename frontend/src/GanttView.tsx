@@ -612,7 +612,7 @@ export default function GanttView({
                                   <div key={s.val} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                                     <div 
                                       title={`${s.label}${isParentTask ? `: ${count}` : ''}`}
-                                      onClick={async (e) => { if (isParentTask || !onStatusChange) return; e.stopPropagation(); const res = await onStatusChange(task.id, s.val); if (res.success) router.refresh(); }}
+                                      onClick={async (e) => { if (isParentTask || !onStatusChange) return; e.stopPropagation(); await onStatusChange(task.id, s.val); }}
                                       style={{ width: '8px', height: '8px', borderRadius: '50%', border: `1.2px solid ${s.color}`, background: isParentTask ? (count > 0 ? s.color : 'transparent') : (currentStatus === s.val.toLowerCase() ? s.color : 'transparent'), cursor: isParentTask ? 'default' : 'pointer' }}
                                     />
                                     {isParentTask && count > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{count}</span>}
