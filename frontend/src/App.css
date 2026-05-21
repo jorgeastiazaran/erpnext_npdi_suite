@@ -1,8 +1,22 @@
 :root {
-  --bg-surface: var(--bg, #ffffff);
-  --bg-surface-2: var(--code-bg, #f9fafb);
-  --text-primary: var(--text-h, #1f2937);
-  --text-muted: var(--text, #6b7280);
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f9fafb;
+  --text-primary: #1f2937;
+  --text-muted: #6b7280;
+}
+
+.theme-light {
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f9fafb;
+  --text-primary: #1f2937;
+  --text-muted: #6b7280;
+}
+
+.theme-dark {
+  --bg-surface: #16171d;
+  --bg-surface-2: #1f2028;
+  --text-primary: #f3f4f6;
+  --text-muted: #9ca3af;
 }
 
 .gantt-container [class*="taskList"] { 
