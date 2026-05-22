@@ -1,8 +1,17 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+def ensure_kg_uom():
+    if not frappe.db.exists("UOM", "Kg"):
+        frappe.get_doc({
+            "doctype": "UOM",
+            "uom_name": "Kg",
+            "must_be_whole_number": 0
+        }).insert(ignore_permissions=True)
+
 def after_install():
     """Gancho ejecutado tras la instalación de la app para inyectar los Custom Fields en la instancia."""
+    ensure_kg_uom()
     create_custom_fields(get_custom_fields(), ignore_validate=True)
     setup_property_setters()
 
