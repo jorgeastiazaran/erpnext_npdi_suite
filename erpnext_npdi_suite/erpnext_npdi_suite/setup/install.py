@@ -4,6 +4,20 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 def after_install():
     """Gancho ejecutado tras la instalación de la app para inyectar los Custom Fields en la instancia."""
     create_custom_fields(get_custom_fields(), ignore_validate=True)
+    setup_property_setters()
+
+def setup_property_setters():
+    if not frappe.db.exists("Property Setter", {"doc_type": "Task Depends On", "field_name": "subject", "property": "fetch_from"}):
+        frappe.get_doc({
+            "doctype": "Property Setter",
+            "doctype_or_field": "DocField",
+            "doc_type": "Task Depends On",
+            "field_name": "subject",
+            "property": "fetch_from",
+            "value": "task.subject",
+            "property_type": "Data"
+        }).insert(ignore_permissions=True)
+
 
 def get_custom_fields():
     return {

@@ -8,6 +8,7 @@ import { toISODateString } from './dateUtils'
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [tasks, setTasks] = useState<any[]>([]);
+  const [projectMeta, setProjectMeta] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'gantt' | 'list'>('gantt');
@@ -41,6 +42,7 @@ function App() {
         callback: function(r: any) {
           if (r.message && r.message.success) {
             setTasks(r.message.tasks);
+            setProjectMeta(r.message.project_meta || null);
           } else {
             setError(r.message?.error || "Error cargando tareas del servidor.");
           }
@@ -248,6 +250,32 @@ function App() {
     });
   };
 
+  const handleCaptureBaseline = async () => {
+    if (!projectMeta || !projectMeta.name) return;
+    setLoading(true);
+    // @ts-ignore
+    if (window.frappe) {
+      // @ts-ignore
+      frappe.call({
+        method: "erpnext_npdi_suite.api.capture_project_baseline",
+        args: { project_name: projectMeta.name },
+        callback: function(r: any) {
+          if (r.message && r.message.success) {
+            // @ts-ignore
+            frappe.show_alert({ message: r.message.message || "Línea base capturada.", indicator: "green" });
+            fetchTasks();
+          } else {
+            alert(r.message?.error || "Error al capturar línea base.");
+            setLoading(false);
+          }
+        }
+      });
+    } else {
+      setProjectMeta((prev: any) => prev ? { ...prev, npdi_baseline_locked: 1 } : null);
+      setLoading(false);
+    }
+  };
+
   return (
     <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
       
@@ -316,6 +344,8 @@ function App() {
           onStatusChange={handleStatusChange}
           onDateChange={handleDateChange}
           onAddQuickTask={handleAddQuickTask}
+          projectMeta={projectMeta}
+          onCaptureBaseline={handleCaptureBaseline}
         />
       ) : (
         <ListView 

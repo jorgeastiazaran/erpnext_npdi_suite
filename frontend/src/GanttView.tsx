@@ -31,11 +31,13 @@ interface GanttViewProps {
     }
   ) => void;
   onDeleteQuickTask?: (taskId: string) => void;
+  projectMeta?: { name: string; npdi_baseline_locked: number } | null;
+  onCaptureBaseline?: () => Promise<any>;
 }
 
 export default function GanttView({ 
   tasks, onTaskClick, onDateChange, onStatusChange, selectedTaskId,
-  onAddQuickTask, onDeleteQuickTask 
+  onAddQuickTask, onDeleteQuickTask, projectMeta, onCaptureBaseline 
 }: GanttViewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Week);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -214,7 +216,35 @@ export default function GanttView({
         const realParentId = t.parentTaskId || t.parentId;
         const parentId = realParentId ? realParentId.toString() : stageId;
         const hasChildren = tasks.some(child => child.parentTaskId === t.id);
-        
+        const isGroup = hasChildren || t.isGroup;
+        const childItems = isGroup ? getRecursiveChildren(t.id) : [];
+
+        // Determine start/end for group/project tasks
+        let taskStart: Date;
+        let taskEnd: Date;
+
+        if (isGroup) {
+          // Filter children with valid start dates
+          const validStarts = childItems
+            .map(c => parseLocalDate(c.planStartDate))
+            .filter(d => d && !isNaN(d.getTime()));
+          // Filter children with valid end dates
+          const validEnds = childItems
+            .map(c => parseLocalDate(c.planEndDate))
+            .filter(d => d && !isNaN(d.getTime()));
+
+          // Fallback to parent's own dates if no valid children dates
+          taskStart = validStarts.length > 0
+            ? new Date(Math.min(...validStarts.map(d => d.getTime())))
+            : parseLocalDate(t.planStartDate);
+          taskEnd = validEnds.length > 0
+            ? new Date(Math.max(...validEnds.map(d => d.getTime())))
+            : parseLocalDate(t.planEndDate);
+        } else {
+          taskStart = parseLocalDate(t.planStartDate);
+          taskEnd = parseLocalDate(t.planEndDate);
+        }
+
         const rawDeps = t.dependencies || t.dependsOn || [];
         const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean);
 
@@ -239,10 +269,9 @@ export default function GanttView({
         let finalBarColor = barColor;
         let finalBgColor = 'rgba(0,0,0,0.05)';
         
-        if (hasChildren) {
-          const childTasks = getRecursiveChildren(t.id);
-          const isAllCompleted = childTasks.length > 0 && childTasks.every(c => c.status?.toLowerCase() === 'completed');
-          const isAnyStarted = childTasks.some(c => {
+        if (isGroup) {
+          const isAllCompleted = childItems.length > 0 && childItems.every(c => c.status?.toLowerCase() === 'completed');
+          const isAnyStarted = childItems.some(c => {
             const s = c.status?.toLowerCase();
             return s === 'completed' || s === 'working' || s === 'in progress' || s === 'blocked' || s === 'awaiting approval' || s === 'pending review' || s === 'overdue' || s === 'cancelled';
           });
@@ -267,13 +296,13 @@ export default function GanttView({
         finalTasks.push({
           id: t.id.toString(),
           name: isCritical && status !== 'completed' ? `🔥 ${t.name}` : t.name,
-          start: parseLocalDate(t.planStartDate),
-          end: parseLocalDate(t.planEndDate),
+          start: taskStart,
+          end: taskEnd,
           progress: taskProgress,
-          type: t.isMilestone ? 'milestone' : ((hasChildren || t.isGroup) ? 'project' : 'task'),
+          type: t.isMilestone ? 'milestone' : (isGroup ? 'project' : 'task'),
           project: parentId,
           hideChildren: collapsedIds.has(t.id.toString()),
-          dependencies: (hasChildren || t.isGroup) ? [] : dependencyIds,
+          dependencies: isGroup ? [] : dependencyIds,
           styles: {
             progressColor: finalBarColor,
             progressSelectedColor: finalBarColor,
@@ -291,7 +320,7 @@ export default function GanttView({
         } as any);
 
         // Phase 6G: Add ghost task for Baseline if toggled on
-        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate && t.baselineStartDate !== t.planStartDate) {
+        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate) {
           finalTasks.push({
             id: `baseline-${t.id}`,
             name: `[Base] ${t.name}`,
@@ -533,7 +562,7 @@ export default function GanttView({
               </button>
             </div>
             
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
               <button 
                 className={`btn ${showBaseline ? 'btn-primary' : 'btn-ghost'}`}
                 style={{ fontSize: '11px', padding: '4px 8px' }}
@@ -541,6 +570,21 @@ export default function GanttView({
               >
                 Baseline
               </button>
+              {projectMeta && (
+                projectMeta.npdi_baseline_locked === 1 ? (
+                  <span style={{ fontSize: '11px', padding: '4px 8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--text-muted)' }}>
+                    <Check size={12} style={{ color: '#22c55e' }} /> Línea Base Congelada
+                  </span>
+                ) : (
+                  <button 
+                    className="btn btn-ghost"
+                    style={{ fontSize: '11px', padding: '4px 8px', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                    onClick={onCaptureBaseline}
+                  >
+                    Capturar Línea Base
+                  </button>
+                )
+              )}
             </div>
           </div>
         </div>

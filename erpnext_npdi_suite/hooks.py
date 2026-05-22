@@ -11,6 +11,8 @@ app_license = "MIT"
 
 # Hook disparado al instalar la app en una instancia
 after_install = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.after_install"
+after_migrate = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.after_install"
+
 
 # Ganchos de documentos transaccionales
 doc_events = {

@@ -4,42 +4,76 @@
  */
 
 export const parseLocalDate = (dateStr: string | Date | null | undefined): Date => {
-  let date: Date;
+  let year: number;
+  let month: number; // 0-indexed
+  let day: number;
+
   if (!dateStr) {
-    date = new Date();
+    const now = new Date();
+    year = now.getFullYear();
+    month = now.getMonth();
+    day = now.getDate();
   } else if (dateStr instanceof Date) {
-    date = new Date(dateStr.getTime());
+    if (isNaN(dateStr.getTime())) {
+      const now = new Date();
+      year = now.getFullYear();
+      month = now.getMonth();
+      day = now.getDate();
+    } else {
+      year = dateStr.getFullYear();
+      month = dateStr.getMonth();
+      day = dateStr.getDate();
+    }
   } else {
-    // Handle case where we might have a full ISO string (e.g. from an existing Date.toISOString())
     const cleanStr = typeof dateStr === 'string' && dateStr.includes('T') 
       ? dateStr.split('T')[0] 
       : String(dateStr);
 
     const parts = cleanStr.split('-');
     if (parts.length === 3) {
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10);
-      const day = parseInt(parts[2], 10);
-      if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
-        // Month is 0-indexed in JS Date constructor
-        date = new Date(year, month - 1, day);
+      const parsedYear = parseInt(parts[0], 10);
+      const parsedMonth = parseInt(parts[1], 10);
+      const parsedDay = parseInt(parts[2], 10);
+      if (!isNaN(parsedYear) && !isNaN(parsedMonth) && !isNaN(parsedDay)) {
+        year = parsedYear;
+        month = parsedMonth - 1; // JS months are 0-based
+        day = parsedDay;
       } else {
         const parsed = new Date(dateStr);
-        date = isNaN(parsed.getTime()) ? new Date() : parsed;
+        if (isNaN(parsed.getTime())) {
+          const now = new Date();
+          year = now.getFullYear();
+          month = now.getMonth();
+          day = now.getDate();
+        } else {
+          year = parsed.getFullYear();
+          month = parsed.getMonth();
+          day = parsed.getDate();
+        }
       }
     } else {
       const parsed = new Date(dateStr);
-      date = isNaN(parsed.getTime()) ? new Date() : parsed;
+      if (isNaN(parsed.getTime())) {
+        const now = new Date();
+        year = now.getFullYear();
+        month = now.getMonth();
+        day = now.getDate();
+      } else {
+        year = parsed.getFullYear();
+        month = parsed.getMonth();
+        day = parsed.getDate();
+      }
     }
   }
-  date.setHours(12, 0, 0, 0);
-  return date;
+
+  // Normalise to 12:00 UTC to avoid timezone offset shifts
+  return new Date(Date.UTC(year, month, day, 12));
 };
 
 export const toISODateString = (d: Date | null | undefined): string => {
   if (!d || isNaN(d.getTime())) return '';
-  const year = d.getFullYear();
-  const month = (d.getMonth() + 1).toString().padStart(2, '0');
-  const day = d.getDate().toString().padStart(2, '0');
+  const year = d.getUTCFullYear();
+  const month = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+  const day = d.getUTCDate().toString().padStart(2, '0');
   return `${year}-${month}-${day}`;
 };

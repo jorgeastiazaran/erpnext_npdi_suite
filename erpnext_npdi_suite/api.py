@@ -6,8 +6,15 @@ def get_project_gantt_data(project=None, template=None):
     Fetch tasks formatted exactly as the React Gantt components expect.
     """
     filters = {}
+    project_meta = {}
     if project:
         filters['project'] = project
+        meta = frappe.db.get_value("Project", project, ["name", "npdi_baseline_locked"], as_dict=True)
+        if meta:
+            project_meta = {
+                "name": meta.name,
+                "npdi_baseline_locked": int(meta.npdi_baseline_locked or 0)
+            }
     elif template:
         filters['project_template'] = template
     else:
@@ -120,7 +127,7 @@ def get_project_gantt_data(project=None, template=None):
             
         tasks_with_deps.append(t)
 
-    return {"success": True, "tasks": tasks_with_deps}
+    return {"success": True, "tasks": tasks_with_deps, "project_meta": project_meta}
 
 @frappe.whitelist()
 def update_task_status(task_id, status):
@@ -227,5 +234,17 @@ def add_task_dependency(task_id, depends_on):
                 engine = CPMEngine(task.project)
                 engine.compute()
         return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@frappe.whitelist()
+def capture_project_baseline(project_name):
+    """
+    Capture baseline for a project.
+    """
+    try:
+        from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import capture_project_baseline as capture
+        res = capture(project_name)
+        return {"success": True, "message": res.get("message") if isinstance(res, dict) else str(res)}
     except Exception as e:
         return {"success": False, "error": str(e)}
