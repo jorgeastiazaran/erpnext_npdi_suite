@@ -119,7 +119,7 @@ class CPMEngine:
         for t in self.tasks:
             if t in self.ls and t in self.es:
                 self.float[t] = (self.ls[t] - self.es[t]).total_seconds() / 3600.0
-                self.is_critical[t] = self.float[t] <= 48.0
+                self.is_critical[t] = self.float[t] <= 0.0
             else:
                 self.float[t] = 0.0
                 self.is_critical[t] = False
@@ -381,10 +381,10 @@ def on_project_insert(doc, method):
         frappe.local.is_instantiating_project = False
 
 
-@frappe.whitelist()
 def capture_project_baseline(project_name):
     """Método de lista blanca para congelar la fotografía de fechas planificadas (Baseline)."""
     project_doc = frappe.get_doc("Project", project_name)
+    project_doc.check_permission("write")
     if project_doc.get("npdi_baseline_locked"):
         frappe.throw("La Línea Base (Baseline) ya ha sido congelada previamente para este proyecto.")
 

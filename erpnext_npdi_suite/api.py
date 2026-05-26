@@ -138,6 +138,7 @@ def update_task_status(task_id, status):
     
     try:
         task = frappe.get_doc('Task', task_id)
+        task.check_permission('write')
         
         # Support mapping from both legacy React status strings and native ERPNext status strings
         reverse_map = {
@@ -169,6 +170,8 @@ def update_task_status(task_id, status):
             engine.compute()
             
         return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "Not permitted"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -181,6 +184,7 @@ def update_task_dates(task_id, start, end):
     
     try:
         task = frappe.get_doc('Task', task_id)
+        task.check_permission('write')
         # Dates come in ISO string format from React
         task.exp_start_date = start.split('T')[0]
         task.exp_end_date = end.split('T')[0]
@@ -191,6 +195,8 @@ def update_task_dates(task_id, start, end):
             engine.compute()
             
         return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "Not permitted"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -211,6 +217,8 @@ def delete_task(task_id):
             engine.compute()
 
         return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "Not permitted"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -223,6 +231,7 @@ def add_task_dependency(task_id, depends_on):
 
     try:
         task = frappe.get_doc('Task', task_id)
+        task.check_permission('write')
         # Check if dependency already exists
         exists = any(d.task == depends_on for d in task.depends_on)
         if not exists:
@@ -234,6 +243,8 @@ def add_task_dependency(task_id, depends_on):
                 engine = CPMEngine(task.project)
                 engine.compute()
         return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "Not permitted"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -243,8 +254,12 @@ def capture_project_baseline(project_name):
     Capture baseline for a project.
     """
     try:
-        from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import capture_project_baseline as capture
-        res = capture(project_name)
+        from erpnext_npdi_suite.erpnext_npdi_suite.engine import cpm
+        res = cpm.capture_project_baseline(project_name)
         return {"success": True, "message": res.get("message") if isinstance(res, dict) else str(res)}
+    except frappe.PermissionError:
+        return {"success": False, "error": "Not permitted"}
+    except frappe.ValidationError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
