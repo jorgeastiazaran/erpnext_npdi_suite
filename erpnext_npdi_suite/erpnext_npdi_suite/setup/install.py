@@ -54,6 +54,8 @@ def setup_property_setters():
 # Keep this list in sync with get_custom_fields() above.
 # Format: (DocType, fieldname)
 _NPDI_SUITE_CUSTOM_FIELDS = [
+    # Project Template
+    ("Project Template", "npdi_template_module"),
     # Project Template Task
     ("Project Template Task", "npdi_stage_name"),
     ("Project Template Task", "npdi_module"),
@@ -133,7 +135,22 @@ def before_uninstall():
 
 def get_custom_fields():
     return {
-        # Extensión de la plantilla nativa de tareas
+        # ── Extensión de Project Template (P5) ──────────────────────────────
+        # Allows tagging a template with its NPDI module scope so users can
+        # filter templates (e.g. Core / Formula / Pack / Brand) when creating
+        # a new project.
+        "Project Template": [
+            {
+                "fieldname": "npdi_template_module",
+                "label": "Módulo NPDI de la Plantilla",
+                "fieldtype": "Select",
+                "options": "\nCore\nFormula\nPack\nBrand",
+                "default": "",
+                "insert_after": "project_type",
+                "description": "Módulo NPDI al que aplica esta plantilla. Se usará para filtrar plantillas al crear un nuevo proyecto."
+            }
+        ],
+        # ── Extensión de la plantilla nativa de tareas ───────────────────────
         "Project Template Task": [
             {
                 "fieldname": "npdi_stage_name",

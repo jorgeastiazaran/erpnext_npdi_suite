@@ -26,3 +26,9 @@ All bugs, architectural defects, and security flaws identified in the `erpnext_n
 * **File:** [cpm.py](file:///Users/jorgeastiazaran/Library/CloudStorage/GoogleDrive-tecnofoodmx@gmail.com/My%20Drive/PycharmProjects/erpnext_v13_testing_local_instance/erpnext_npdi_suite/erpnext_npdi_suite/erpnext_npdi_suite/engine/cpm.py#L387)
 * **Description:** `capture_project_baseline` updated Task and Project fields in the database using `frappe.db.set_value` without validating whether the active session had write permissions on the Project.
 * **Fix Applied:** Added `project_doc.check_permission("write")` inside `capture_project_baseline` prior to making database writes to ensure proper authorization.
+Regarding the NPDI_suite I've reviewed the schema of the propject template tasks and I see that the information contained in the doctype is insufficient to properly (in a native way) create a new project with the expected structure (taks length, dependencies, module, etc) This makes me think that we've created a personalized functionality to enrich the project template tasks once a new project is instantiated, injectin all the needed parameters. The problem with this approach is that it'll make the project template incapable of creating new project templates which would fully function inside the npdi suite module (gantt graph, dependencies, etc.)
+
+
+'id expect that the ERPNext projec template tasks doctype would contain all the fields needed to fully configure a new project template, including task length, dependencies, module, etc. 
+
+Please review this issue and give me your findings and action plan.

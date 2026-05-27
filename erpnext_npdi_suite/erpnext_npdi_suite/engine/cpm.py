@@ -318,42 +318,148 @@ def on_task_update(doc, method):
 
 
 def on_project_insert(doc, method):
-    """Gancho disparado al instanciar un Proyecto para heredar atributos custom desde Project Template Task."""
+    """
+    Hook fired when a Project is created from a Project Template.
+
+    Responsibilities:
+    1. [P1] Copy NPDI metadata (stage, module, role, etc.) from each Project Template Task
+       row onto the newly-instantiated Task, using duration from the template row first.
+    2. [P2] Propagate inter-task dependency relationships stored on Project Template Task
+       depends_on rows onto the corresponding project Tasks so the dependency graph is fully
+       wired without needing pre-existing Task records.
+    3. [P3] Use idx-based positional matching (primary) with subject-name fallback (secondary)
+       to eliminate silent failures caused by duplicate task titles.
+    4. Populate `subject` on all Task Depends On rows for UI display.
+    5. Run the CPM engine once synchronously after all enrichment is complete.
+    """
     if not getattr(frappe.local, 'is_instantiating_project', False):
         return
 
     if not doc.project_template:
         frappe.local.is_instantiating_project = False
         return
-        
-    template_tasks = frappe.get_all("Project Template Task", filters={"parent": doc.project_template}, fields=["task", "npdi_stage_name", "npdi_module", "npdi_responsible_role", "npdi_requires_attachment", "npdi_launch_milestone"])
+
+    # ── Load template tasks ordered by idx ──────────────────────────────────
+    template_tasks = frappe.get_all(
+        "Project Template Task",
+        filters={"parent": doc.project_template},
+        fields=[
+            "name", "task", "idx",
+            "npdi_stage_name", "npdi_module", "npdi_responsible_role",
+            "npdi_requires_attachment", "npdi_launch_milestone", "duration"
+        ],
+        order_by="idx asc"
+    )
     if not template_tasks:
+        frappe.local.is_instantiating_project = False
         return
 
-    # Mapea las tareas generadas en el proyecto actual por título
-    generated_tasks = frappe.get_all("Task", filters={"project": doc.name}, fields=["name", "subject"])
-    task_map = {t.subject: t.name for t in generated_tasks}
+    # ── Load generated tasks ordered by creation (mirrors template insertion order) ──
+    generated_tasks = frappe.get_all(
+        "Task",
+        filters={"project": doc.name},
+        fields=["name", "subject", "creation"],
+        order_by="creation asc"
+    )
+    if not generated_tasks:
+        frappe.local.is_instantiating_project = False
+        return
 
-    for tmpl in template_tasks:
-        tmpl_data = frappe.db.get_value("Task", tmpl.task, ["subject", "duration"], as_dict=True)
-        if not tmpl_data:
+    # ── [P3] Build primary (idx-positional) and secondary (subject) maps ────
+    # ERPNext inserts template tasks in idx order, so positional alignment is reliable.
+    idx_to_generated = {}
+    for position, gen_task in enumerate(generated_tasks):
+        idx_to_generated[position] = gen_task.name
+
+    subject_to_generated = {t.subject: t.name for t in generated_tasks}
+    generated_name_to_subject = {t.name: t.subject for t in generated_tasks}
+
+    # Also build a reverse map: template task record name → generated task name,
+    # needed for P2 dependency propagation.
+    tmpl_task_record_to_generated = {}
+
+    # ── [P1 + P3] Enrich each generated task with NPDI metadata ─────────────
+    for position, tmpl in enumerate(template_tasks):
+        # Resolve the generated task: try positional match first, then subject fallback
+        target_task_name = idx_to_generated.get(position)
+
+        if not target_task_name:
+            # Fallback: look up subject from the template task record
+            tmpl_record_subject = frappe.db.get_value("Task", tmpl.task, "subject") if tmpl.task else None
+            if tmpl_record_subject:
+                target_task_name = subject_to_generated.get(tmpl_record_subject)
+
+        if not target_task_name:
             continue
-        tmpl_subject = tmpl_data.subject
-        duration = tmpl_data.duration or 0
-        target_task_name = task_map.get(tmpl_subject)
-        if target_task_name:
-            frappe.db.set_value("Task", target_task_name, {
-                "duration": duration,
-                "npdi_stage_name": tmpl.npdi_stage_name,
-                "npdi_module": tmpl.npdi_module or "Core",
-                "npdi_responsible_role": tmpl.npdi_responsible_role,
-                "npdi_requires_attachment": tmpl.npdi_requires_attachment,
-                "npdi_launch_milestone": tmpl.npdi_launch_milestone
-            })
 
-    # Poblar el campo 'subject' en las filas de Task Depends On para que la tabla
-    # muestre el nombre de la tarea en lugar del ID
-    subject_map = {t.name: t.subject for t in generated_tasks}
+        # [P3] Track template task record → generated task for dependency mapping
+        if tmpl.task:
+            tmpl_task_record_to_generated[tmpl.task] = target_task_name
+        # Also track by template row name for depends_on resolution
+        tmpl_task_record_to_generated[tmpl.name] = target_task_name
+
+        # [P1] Use duration from the template row first; fall back to the task record
+        duration = tmpl.duration
+        if not duration and tmpl.task:
+            duration = frappe.db.get_value("Task", tmpl.task, "duration") or 0
+
+        frappe.db.set_value("Task", target_task_name, {
+            "duration": duration,
+            "npdi_stage_name": tmpl.npdi_stage_name,
+            "npdi_module": tmpl.npdi_module or "Core",
+            "npdi_responsible_role": tmpl.npdi_responsible_role,
+            "npdi_requires_attachment": int(tmpl.npdi_requires_attachment or 0),
+            "npdi_launch_milestone": int(tmpl.npdi_launch_milestone or 0),
+        })
+
+    # ── [P2] Propagate dependency graph from Project Template Task depends_on ─
+    # Check whether the Project Template Task doctype has a depends_on child table.
+    # In ERPNext v13 this is "Task Template Depends On" with a `task` Link field.
+    template_has_depends_on = frappe.db.exists(
+        "DocType", "Task Template Depends On"
+    )
+
+    if template_has_depends_on:
+        for tmpl in template_tasks:
+            target_task_name = (
+                tmpl_task_record_to_generated.get(tmpl.name)
+                or tmpl_task_record_to_generated.get(tmpl.task)
+            )
+            if not target_task_name:
+                continue
+
+            # Read dependency rows from the template task row
+            tmpl_dep_rows = frappe.get_all(
+                "Task Template Depends On",
+                filters={"parent": tmpl.name},
+                fields=["task"],
+            )
+            if not tmpl_dep_rows:
+                continue
+
+            # Load the target task document to append dependencies
+            target_doc = frappe.get_doc("Task", target_task_name)
+            existing_dep_ids = {d.task for d in (target_doc.depends_on or [])}
+
+            added = False
+            for dep_row in tmpl_dep_rows:
+                # dep_row.task is a Project Template Task record name
+                dep_generated_name = tmpl_task_record_to_generated.get(dep_row.task)
+                if not dep_generated_name:
+                    continue
+                if dep_generated_name in existing_dep_ids:
+                    continue
+                target_doc.append("depends_on", {
+                    "task": dep_generated_name,
+                    "subject": generated_name_to_subject.get(dep_generated_name, ""),
+                })
+                existing_dep_ids.add(dep_generated_name)
+                added = True
+
+            if added:
+                target_doc.save(ignore_permissions=True)
+
+    # ── Populate `subject` on all Task Depends On rows for UI display ────────
     dep_rows = frappe.db.sql("""
         SELECT tdo.name, tdo.task
         FROM `tabTask Depends On` tdo
@@ -362,14 +468,17 @@ def on_project_insert(doc, method):
           AND tdo.task IS NOT NULL AND tdo.task != ''
     """, (doc.name,), as_dict=True)
     for dep_row in dep_rows:
-        dep_subject = subject_map.get(dep_row.task) or frappe.db.get_value("Task", dep_row.task, "subject")
+        dep_subject = (
+            generated_name_to_subject.get(dep_row.task)
+            or frappe.db.get_value("Task", dep_row.task, "subject")
+        )
         if dep_subject:
-            frappe.db.sql("UPDATE `tabTask Depends On` SET subject = %s WHERE name = %s",
-                          (dep_subject, dep_row.name))
+            frappe.db.sql(
+                "UPDATE `tabTask Depends On` SET subject = %s WHERE name = %s",
+                (dep_subject, dep_row.name)
+            )
 
-    # Como hemos bloqueado on_task_update durante la instanciación, ejecutamos el motor CPM sincronamente AHORA
-
-    # Esto ocurre una sola vez, y es extremadamente rápido, por lo que no bloqueará la UI
+    # ── Run CPM engine once synchronously after all enrichment is complete ───
     try:
         frappe.local.cpm_processing = True
         engine = CPMEngine(doc.name)
