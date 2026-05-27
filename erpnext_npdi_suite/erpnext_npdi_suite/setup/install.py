@@ -10,10 +10,31 @@ def ensure_kg_uom():
         }).insert(ignore_permissions=True)
 
 def after_install():
-    """Gancho ejecutado tras la instalación de la app para inyectar los Custom Fields en la instancia."""
+    """
+    Gancho ejecutado tras la instalación de la app.
+    Idempotente: seguro de ejecutar múltiples veces sin errores DuplicateEntry.
+    """
     ensure_kg_uom()
-    create_custom_fields(get_custom_fields(), ignore_validate=True)
+    _create_custom_fields_idempotent(get_custom_fields())
     setup_property_setters()
+
+
+def _create_custom_fields_idempotent(custom_fields_map):
+    """
+    Calls create_custom_fields() only for fields that do not yet exist.
+    Makes the installer safe to run on both fresh and partially-migrated sites.
+    """
+    filtered = {}
+    for dt, fields in custom_fields_map.items():
+        missing = [
+            f for f in fields
+            if not frappe.db.exists("Custom Field", {"dt": dt, "fieldname": f["fieldname"]})
+        ]
+        if missing:
+            filtered[dt] = missing
+
+    if filtered:
+        create_custom_fields(filtered, ignore_validate=True)
 
 def setup_property_setters():
     if not frappe.db.exists("Property Setter", {"doc_type": "Task Depends On", "field_name": "subject", "property": "fetch_from"}):
@@ -26,6 +47,88 @@ def setup_property_setters():
             "value": "task.subject",
             "property_type": "Data"
         }).insert(ignore_permissions=True)
+
+
+
+# ─── List of ALL custom fields this app injects into standard DocTypes ───────
+# Keep this list in sync with get_custom_fields() above.
+# Format: (DocType, fieldname)
+_NPDI_SUITE_CUSTOM_FIELDS = [
+    # Project Template Task
+    ("Project Template Task", "npdi_stage_name"),
+    ("Project Template Task", "npdi_module"),
+    ("Project Template Task", "npdi_responsible_role"),
+    ("Project Template Task", "npdi_requires_attachment"),
+    ("Project Template Task", "npdi_launch_milestone"),
+    # Project
+    ("Project", "npdi_project_variant"),
+    ("Project", "npdi_baseline_section"),
+    ("Project", "npdi_baseline_locked"),
+    ("Project", "npdi_baseline_start"),
+    ("Project", "npdi_baseline_end"),
+    # Task
+    ("Task", "npdi_cpm_section"),
+    ("Task", "npdi_cpm_early_start"),
+    ("Task", "npdi_cpm_early_finish"),
+    ("Task", "npdi_cpm_late_start"),
+    ("Task", "npdi_cpm_late_finish"),
+    ("Task", "npdi_cpm_total_float"),
+    ("Task", "npdi_cpm_is_critical"),
+    ("Task", "npdi_manual_section"),
+    ("Task", "npdi_cpm_manual_dates"),
+    ("Task", "npdi_manual_start"),
+    ("Task", "npdi_manual_end"),
+    ("Task", "npdi_attributes_section"),
+    ("Task", "npdi_stage_name"),
+    ("Task", "npdi_module"),
+    ("Task", "npdi_responsible_role"),
+    ("Task", "npdi_requires_attachment"),
+    ("Task", "npdi_launch_milestone"),
+    ("Task", "npdi_baseline_start"),
+    ("Task", "npdi_baseline_end"),
+]
+
+# Property Setters created by this app
+_NPDI_SUITE_PROPERTY_SETTERS = [
+    # (doc_type, field_name, property)
+    ("Task Depends On", "subject", "fetch_from"),
+]
+
+
+def before_uninstall():
+    """
+    Hook ejecutado antes de remover la app de un sitio.
+    Elimina todos los Custom Fields y Property Setters inyectados por erpnext_npdi_suite.
+    """
+    frappe.logger().info("erpnext_npdi_suite: running before_uninstall cleanup…")
+
+    # 1. Delete Custom Field records
+    for dt, fieldname in _NPDI_SUITE_CUSTOM_FIELDS:
+        cf_name = frappe.db.get_value(
+            "Custom Field", {"dt": dt, "fieldname": fieldname}
+        )
+        if cf_name:
+            frappe.delete_doc(
+                "Custom Field", cf_name,
+                ignore_missing=True, ignore_permissions=True, force=True
+            )
+            frappe.logger().info(f"  Deleted Custom Field: {dt} → {fieldname}")
+
+    # 2. Delete Property Setter records
+    for doc_type, field_name, prop in _NPDI_SUITE_PROPERTY_SETTERS:
+        ps_name = frappe.db.get_value(
+            "Property Setter",
+            {"doc_type": doc_type, "field_name": field_name, "property": prop}
+        )
+        if ps_name:
+            frappe.delete_doc(
+                "Property Setter", ps_name,
+                ignore_missing=True, ignore_permissions=True, force=True
+            )
+            frappe.logger().info(f"  Deleted Property Setter: {doc_type}.{field_name}.{prop}")
+
+    frappe.db.commit()
+    frappe.logger().info("erpnext_npdi_suite: before_uninstall cleanup complete.")
 
 
 def get_custom_fields():
