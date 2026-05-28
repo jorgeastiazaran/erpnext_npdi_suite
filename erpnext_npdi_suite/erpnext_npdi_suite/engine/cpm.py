@@ -323,7 +323,6 @@ def on_project_insert(doc, method):
 
     Responsibilities:
     1. [P1] Copy NPDI metadata (stage, module, role, etc.) from each Project Template Task
-       row onto the newly-instantiated Task, using duration from the template row first.
     2. [P2] Propagate inter-task dependency relationships stored on Project Template Task
        depends_on rows onto the corresponding project Tasks so the dependency graph is fully
        wired without needing pre-existing Task records.
@@ -346,7 +345,7 @@ def on_project_insert(doc, method):
         fields=[
             "name", "task", "idx",
             "npdi_stage_name", "npdi_module", "npdi_responsible_role",
-            "npdi_requires_attachment", "npdi_launch_milestone", "duration"
+            "npdi_requires_attachment", "npdi_launch_milestone"
         ],
         order_by="idx asc"
     )
@@ -398,9 +397,11 @@ def on_project_insert(doc, method):
         # Also track by template row name for depends_on resolution
         tmpl_task_record_to_generated[tmpl.name] = target_task_name
 
-        # [P1] Use duration from the template row first; fall back to the task record
-        duration = tmpl.duration
-        if not duration and tmpl.task:
+        # [P1] Read duration from the linked Task record.
+        # In ERPNext v13, Project Template Task has no 'duration' column of its own;
+        # duration is stored on the Task record that the template row references.
+        duration = 0
+        if tmpl.task:
             duration = frappe.db.get_value("Task", tmpl.task, "duration") or 0
 
         frappe.db.set_value("Task", target_task_name, {
