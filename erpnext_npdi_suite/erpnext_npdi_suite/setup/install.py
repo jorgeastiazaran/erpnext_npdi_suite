@@ -62,6 +62,7 @@ _NPDI_SUITE_CUSTOM_FIELDS = [
     ("Project Template Task", "npdi_responsible_role"),
     ("Project Template Task", "npdi_requires_attachment"),
     ("Project Template Task", "npdi_launch_milestone"),
+    ("Project Template Task", "duration"),
     # Project
     ("Project", "npdi_project_variant"),
     ("Project", "npdi_baseline_section"),
@@ -186,6 +187,14 @@ def get_custom_fields():
                 "fieldtype": "Check",
                 "default": "0",
                 "insert_after": "npdi_requires_attachment"
+            },
+            {
+                "fieldname": "duration",
+                "label": "Duración (días)",
+                "fieldtype": "Float",
+                "default": "0",
+                "insert_after": "npdi_launch_milestone",
+                "description": "Duración de la tarea en días. Si se especifica aquí, sobreescribe la duración de la tarea vinculada al instanciar el proyecto."
             }
         ],
         # Extensión del proyecto transaccional
