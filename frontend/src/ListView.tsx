@@ -17,7 +17,11 @@ import {
   User,
   MoreVertical,
   Link,
-  Flag
+  Flag,
+  Pencil,
+  Check,
+  X,
+  Loader2
 } from 'lucide-react';
 import './ListView.css';
 import { parseLocalDate, toISODateString } from './dateUtils';
@@ -38,6 +42,7 @@ interface ListViewProps {
   onDeleteQuickTask?: (taskId: string) => void;
   onAddTaskDependency?: (taskId: string, dependsOnId: string) => Promise<any>;
   onSkipTask?: (taskId: string, isSkip: boolean) => Promise<any>;
+  onUpdateTask?: (taskId: string, data: any) => Promise<any>;
 }
 
 export default function ListView({ 
@@ -47,7 +52,8 @@ export default function ListView({
   onAddQuickTask, 
   onDeleteQuickTask,
   onAddTaskDependency,
-  onSkipTask
+  onSkipTask,
+  onUpdateTask
 }: ListViewProps) {
   const getStatusClass = (status: string) => {
     const s = status || 'Open';
@@ -112,6 +118,11 @@ export default function ListView({
   const [stageExpandDepths, setStageExpandDepths] = useState<Record<string, number>>({});
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
+  // ── Inline Editing State ──────────────────────────────────────────────────
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editData, setEditData] = useState<any>(null);
+  const [isEditSaving, setIsEditSaving] = useState(false);
+
   // ── Drag-to-connect Visual Dependencies ─────────────────────────────────
   const [dragState, setDragState] = useState<{
     sourceId: string | null;
@@ -133,7 +144,21 @@ export default function ListView({
     const handleMouseUp = async () => {
       const state = dragRef.current;
       if (state.sourceId && state.hoverTargetId && state.sourceId !== state.hoverTargetId) {
-        if (onAddTaskDependency) {
+        // Check hierarchy to prevent circular parent-child dependency
+        const getAncestors = (taskId: string): Set<string> => {
+          const ancestors = new Set<string>();
+          let current = tasks.find((t: any) => t.id === taskId);
+          while (current && current.parentTaskId) {
+            ancestors.add(current.parentTaskId);
+            current = tasks.find((t: any) => t.id === current?.parentTaskId);
+          }
+          return ancestors;
+        };
+        const sourceAncestors = getAncestors(state.sourceId);
+        const targetAncestors = getAncestors(state.hoverTargetId);
+        if (sourceAncestors.has(state.hoverTargetId) || targetAncestors.has(state.sourceId)) {
+          alert("No se puede crear una dependencia entre una tarea y su subtarea.");
+        } else if (onAddTaskDependency) {
           await onAddTaskDependency(state.hoverTargetId, state.sourceId);
         }
       }
@@ -298,6 +323,41 @@ export default function ListView({
     });
   };
 
+  const handleEditTask = (task: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const duration = getDuration(task.planStartDate, task.planEndDate);
+    setEditData({
+      name: task.name,
+      stageName: task.stageName || 'General',
+      durationValue: duration,
+      durationUnit: 'days', // currently only days supported in ListView UI naturally
+      roleId: task.assignedTo?.name || task.npdiResponsibleRole || '',
+      module: task.npdiModule || 'core'
+    });
+    setEditingTaskId(task.id);
+  };
+
+  const handleSaveEdit = async (taskId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isEditSaving || !onUpdateTask) return;
+    setIsEditSaving(true);
+    try {
+      await onUpdateTask(taskId, editData);
+      setEditingTaskId(null);
+      setEditData(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
+
+  const handleCancelEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTaskId(null);
+    setEditData(null);
+  };
+
   const handleStatusChangeInternal = async (taskId: string, status: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (updatingTaskId || !onStatusChange) return;
@@ -398,207 +458,315 @@ export default function ListView({
             }} />
           )}
 
-          <div className="task-main">
-            {depth > 0 && !isFilteringActive && (
-              <ChevronRight 
-                size={14} 
-                style={{ 
-                  color: 'var(--text-muted)', 
-                  flexShrink: 0,
-                  opacity: 0.5
-                }} 
-              />
-            )}
-            
-            {task.isMilestone && (
-              <Flag size={14} style={{ color: isOverdue ? '#ef4444' : '#f59e0b', flexShrink: 0, marginTop: '2px' }} />
-            )}
+          {editingTaskId === task.id ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input 
+                  type="text" 
+                  className="template-input" 
+                  value={editData.name} 
+                  onChange={e => setEditData({ ...editData, name: e.target.value })} 
+                  style={{ flex: 1 }}
+                  placeholder="Nombre de la tarea"
+                  autoFocus
+                />
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--bg-surface-2)', padding: '2px 8px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                  <Clock size={12} style={{ color: 'var(--text-muted)' }} />
+                  <input
+                    type="number"
+                    className="template-input"
+                    style={{ width: '50px', padding: '4px', textAlign: 'center', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', borderRadius: 0 }}
+                    value={editData.durationValue}
+                    onChange={e => setEditData({ ...editData, durationValue: parseInt(e.target.value) || 1 })}
+                    min={1}
+                  />
+                  <select
+                    className="template-select"
+                    style={{ border: 'none', background: 'transparent', paddingLeft: '4px' }}
+                    value={editData.durationUnit}
+                    onChange={e => setEditData({ ...editData, durationUnit: e.target.value })}
+                  >
+                    <option value="days">Días</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <select 
+                  className="template-select" 
+                  value={editData.stageName} 
+                  onChange={e => setEditData({ ...editData, stageName: e.target.value })}
+                  style={{ width: '120px' }}
+                >
+                  <option value="General">General</option>
+                  {stages.filter((s: string) => s !== 'All' && s !== 'General').map((s: string) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
-              <span className="task-name" style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '8px',
-                fontWeight: depth === 0 ? 700 : 500,
-                fontSize: depth === 0 ? '14px' : '13px'
-              }}>
-                <span className="task-name-text">{task.name}</span>
-                {task.role?.name && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 500 }}>
-                    ({task.role.name})
-                  </span>
+                <select 
+                  className="template-select" 
+                  value={editData.module} 
+                  onChange={e => setEditData({ ...editData, module: e.target.value })}
+                  style={{ width: '120px' }}
+                >
+                  <option value="core">Core</option>
+                  <option value="formula">Fórmula</option>
+                  <option value="pack">Empaque</option>
+                  <option value="brand">Marca</option>
+                </select>
+
+                <select 
+                  className="template-select" 
+                  value={editData.roleId} 
+                  onChange={e => setEditData({ ...editData, roleId: e.target.value })}
+                  style={{ width: '140px' }}
+                >
+                  <option value="">Sin Rol Asignado</option>
+                  {["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+
+                <div style={{ flex: 1 }} />
+                
+                <button 
+                  className="btn-icon" 
+                  onClick={(e) => handleSaveEdit(task.id, e)} 
+                  disabled={isEditSaving}
+                  style={{ background: '#22c55e', color: 'white', border: 'none' }}
+                  title="Guardar"
+                >
+                  {isEditSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                </button>
+                <button 
+                  className="btn-icon" 
+                  onClick={handleCancelEdit} 
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)' }}
+                  title="Cancelar"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="task-main">
+                {depth > 0 && !isFilteringActive && (
+                  <ChevronRight 
+                    size={14} 
+                    style={{ 
+                      color: 'var(--text-muted)', 
+                      flexShrink: 0,
+                      opacity: 0.5
+                    }} 
+                  />
                 )}
                 
-                {task.attachmentUrl && (
-                  <span title="Tiene evidencia adjunta" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 6px', background: 'rgba(34, 197, 94, 0.1)', borderRadius: '10px', fontSize: '9px', fontWeight: 600, color: '#22c55e' }}>
-                    <Link size={10} /> Evidencia
+                {task.isMilestone && (
+                  <Flag size={14} style={{ color: isOverdue ? '#ef4444' : '#f59e0b', flexShrink: 0, marginTop: '2px' }} />
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
+                  <span className="task-name" style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '8px',
+                    fontWeight: depth === 0 ? 700 : 500,
+                    fontSize: depth === 0 ? '14px' : '13px'
+                  }}>
+                    <span className="task-name-text">{task.name}</span>
+                    {task.role?.name && (
+                      <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 500 }}>
+                        ({task.role.name})
+                      </span>
+                    )}
+                    
+                    {task.attachmentUrl && (
+                      <span title="Tiene evidencia adjunta" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 6px', background: 'rgba(34, 197, 94, 0.1)', borderRadius: '10px', fontSize: '9px', fontWeight: 600, color: '#22c55e' }}>
+                        <Link size={10} /> Evidencia
+                      </span>
+                    )}
+
+                    {task.isFixed && (
+                      <span title="Fecha anclada" style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 6px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '10px', fontSize: '9px', fontWeight: 600, color: '#d97706' }}>
+                        📌 Fijada
+                      </span>
+                    )}
+
+                    {isOverdue && (
+                      <span title="Tarea retrasada" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', padding: '2px 6px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '10px', fontSize: '10px', fontWeight: 700, color: '#ef4444' }}>
+                        ⚠️ {overdueDays}d retraso
+                      </span>
+                    )}
+
+                    {task.isSkipped && (
+                      <span style={{ padding: '2px 6px', background: 'var(--bg-surface-2)', borderRadius: '4px', fontSize: '9px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                        Omitida
+                      </span>
+                    )}
+
+                    {isCritical && !task.isSkipped && task.status !== 'Completed' && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', padding: '2px 6px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '4px', fontSize: '9px', fontWeight: 600, color: '#ef4444' }}>
+                        🔥 Ruta Crítica
+                      </span>
+                    )}
+
+                    {hasChildren && (
+                      <button 
+                        onClick={(e) => handleToggleParent(task.id, e)}
+                        style={{ 
+                          display: 'inline-flex', 
+                          alignItems: 'center', 
+                          gap: '2px', 
+                          fontSize: '9px', 
+                          color: 'var(--text-muted)', 
+                          background: 'var(--bg-surface-2)', 
+                          padding: '2px 6px', 
+                          borderRadius: '4px', 
+                          cursor: 'pointer', 
+                          border: '1px solid var(--border)' 
+                        }}
+                      >
+                        <ChevronDown size={10} style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0)', transition: 'transform 150ms' }} />
+                        {children.length} subtarea{children.length !== 1 ? 's' : ''}
+                      </button>
+                    )}
                   </span>
-                )}
 
-                {task.isFixed && (
-                  <span title="Fecha anclada" style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 6px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '10px', fontSize: '9px', fontWeight: 600, color: '#d97706' }}>
-                    📌 Fijada
-                  </span>
-                )}
-
-                {isOverdue && (
-                  <span title="Tarea retrasada" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', padding: '2px 6px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '10px', fontSize: '10px', fontWeight: 700, color: '#ef4444' }}>
-                    ⚠️ {overdueDays}d retraso
-                  </span>
-                )}
-
-                {task.isSkipped && (
-                  <span style={{ padding: '2px 6px', background: 'var(--bg-surface-2)', borderRadius: '4px', fontSize: '9px', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    Omitida
-                  </span>
-                )}
-
-                {isCritical && !task.isSkipped && task.status !== 'Completed' && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', padding: '2px 6px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '4px', fontSize: '9px', fontWeight: 600, color: '#ef4444' }}>
-                    🔥 Ruta Crítica
-                  </span>
-                )}
-
-                {hasChildren && (
-                  <button 
-                    onClick={(e) => handleToggleParent(task.id, e)}
-                    style={{ 
-                      display: 'inline-flex', 
-                      alignItems: 'center', 
-                      gap: '2px', 
-                      fontSize: '9px', 
-                      color: 'var(--text-muted)', 
-                      background: 'var(--bg-surface-2)', 
-                      padding: '2px 6px', 
-                      borderRadius: '4px', 
-                      cursor: 'pointer', 
-                      border: '1px solid var(--border)' 
-                    }}
-                  >
-                    <ChevronDown size={10} style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0)', transition: 'transform 150ms' }} />
-                    {children.length} subtarea{children.length !== 1 ? 's' : ''}
-                  </button>
-                )}
-              </span>
-
-              {/* Task metadata row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>
-                  {formatDate(task.planStartDate)} — {formatDate(task.planEndDate)}
-                </span>
-                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                  ({duration} día{duration !== 1 ? 's' : ''})
-                </span>
-                {task.npdiModule && (
-                  <span 
-                    style={{ 
-                      padding: '1px 6px', 
-                      borderRadius: '4px', 
-                      background: getModuleBadgeColor(task.npdiModule).bg,
-                      color: getModuleBadgeColor(task.npdiModule).text,
-                      fontSize: '9px',
-                      fontWeight: '600'
-                    }}
-                  >
-                    {task.npdiModule}
-                  </span>
-                )}
-                {!isCritical && !task.isSkipped && task.status !== 'Completed' && task.slack > 0 && (
-                  <span style={{ color: '#10b981' }}>• Holgura: {task.slack} d</span>
-                )}
-                <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', fontSize: '9px' }}>
-                  ID: {task.id}
-                </span>
-              </div>
-            </div>
-
-            {task.isMilestone && <span className="task-milestone-badge" style={{ marginLeft: '12px' }}>Hito</span>}
-          </div>
-
-          <div className="task-actions-cell">
-            {/* Responsible User Assignee display */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '120px' }}>
-              <div className="sidebar-user-avatar" style={{ width: '22px', height: '22px', fontSize: '9px', background: 'var(--bg-surface-2)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                {task.assignedTo?.name ? task.assignedTo.name.substring(0, 2) : <User size={11} />}
-              </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{task.assignedTo?.name || 'Sin asignar'}</span>
-            </div>
-
-            {/* Status pills selector inline */}
-            {!task.isSkipped ? (
-              <div className="status-toggle">
-                {['Open', 'Working', 'Pending Review', 'Completed', 'Overdue'].map((status) => (
-                  <button 
-                    key={status}
-                    title={getStatusLabel(status, false)}
-                    className={`status-btn ${task.status === status ? `active ${getStatusClass(status)}` : ''}`}
-                    onClick={(e) => handleStatusChangeInternal(task.id, status, e)}
-                  >
-                    {getStatusLabel(status, true)}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <button 
-                className="btn btn-ghost" 
-                style={{ fontSize: '11px', padding: '4px 12px', border: '1px solid var(--border)', borderRadius: '4px', cursor: 'pointer', background: 'var(--bg-surface-2)' }}
-                onClick={(e) => { e.stopPropagation(); onSkipTask?.(task.id, false); }}
-              >
-                Restaurar Tarea
-              </button>
-            )}
-            
-            <div style={{ display: 'flex', gap: '4px' }}>
-              {/* Quick Add Sub-task */}
-              {!task.isMilestone && (
-                <button 
-                  className="btn-icon" 
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
-                    const deps = task.dependencies
-                      ? task.dependencies.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean)
-                      : [];
-                    onAddQuickTask?.(task.stageName, task.id, {
-                      dependencies: deps,
-                      startDate: task.planStartDate,
-                      npdiModule: task.npdiModule
-                    }); 
-                  }}
-                  style={{ width: '26px', height: '26px' }}
-                  title="Agregar sub-tarea"
-                >
-                  <Plus size={12} />
-                </button>
-              )}
-              
-              {/* Delete ad-hoc / contextual task */}
-              {onDeleteQuickTask && (
-                <button 
-                  className="btn-icon" 
-                  onClick={(e) => handleDeleteTaskInternal(task.id, task.name, e)}
-                  style={{ width: '26px', height: '26px', color: '#ef4444' }}
-                  title="Eliminar tarea"
-                >
-                  <Trash2 size={12} />
-                </button>
-              )}
-
-              {/* Drag Handle Node for Visual Dependency Connection */}
-              {!task.isMilestone && (
-                <div
-                  className={`template-task-drag-node ${dragState.sourceId === task.id ? 'active' : ''}`}
-                  title="Arrastra hasta otra tarea para crear una dependencia"
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    handleDragStart(task.id, e, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-                  }}
-                >
-                  <div className="inner-dot" />
+                  {/* Task metadata row */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {formatDate(task.planStartDate)} — {formatDate(task.planEndDate)}
+                    </span>
+                    <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                      ({duration} día{duration !== 1 ? 's' : ''})
+                    </span>
+                    {task.npdiModule && (
+                      <span 
+                        style={{ 
+                          padding: '1px 6px', 
+                          borderRadius: '4px', 
+                          background: getModuleBadgeColor(task.npdiModule).bg,
+                          color: getModuleBadgeColor(task.npdiModule).text,
+                          fontSize: '9px',
+                          fontWeight: '600'
+                        }}
+                      >
+                        {task.npdiModule}
+                      </span>
+                    )}
+                    {!isCritical && !task.isSkipped && task.status !== 'Completed' && task.slack > 0 && (
+                      <span style={{ color: '#10b981' }}>• Holgura: {task.slack} d</span>
+                    )}
+                    <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', fontSize: '9px' }}>
+                      ID: {task.id}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
+
+                {task.isMilestone && <span className="task-milestone-badge" style={{ marginLeft: '12px' }}>Hito</span>}
+              </div>
+
+              <div className="task-actions-cell">
+                {/* Responsible User Assignee display */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '120px' }}>
+                  <div className="sidebar-user-avatar" style={{ width: '22px', height: '22px', fontSize: '9px', background: 'var(--bg-surface-2)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    {task.assignedTo?.name ? task.assignedTo.name.substring(0, 2) : <User size={11} />}
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{task.assignedTo?.name || 'Sin asignar'}</span>
+                </div>
+
+                {/* Status pills selector inline */}
+                {!task.isSkipped ? (
+                  <div className="status-toggle">
+                    {['Open', 'Working', 'Pending Review', 'Completed', 'Overdue'].map((status) => (
+                      <button 
+                        key={status}
+                        title={getStatusLabel(status, false)}
+                        className={`status-btn ${task.status === status ? `active ${getStatusClass(status)}` : ''}`}
+                        onClick={(e) => handleStatusChangeInternal(task.id, status, e)}
+                      >
+                        {getStatusLabel(status, true)}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <button 
+                    className="btn btn-ghost" 
+                    style={{ fontSize: '11px', padding: '4px 12px', border: '1px solid var(--border)', borderRadius: '4px', cursor: 'pointer', background: 'var(--bg-surface-2)' }}
+                    onClick={(e) => { e.stopPropagation(); onSkipTask?.(task.id, false); }}
+                  >
+                    Restaurar Tarea
+                  </button>
+                )}
+                
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {/* Inline Edit Node */}
+                  {!task.isMilestone && (
+                    <button 
+                      className="btn-icon" 
+                      onClick={(e) => handleEditTask(task, e)}
+                      style={{ width: '26px', height: '26px', color: 'var(--text-muted)' }}
+                      title="Editar tarea"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                  )}
+
+                  {/* Quick Add Sub-task */}
+                  {!task.isMilestone && (
+                    <button 
+                      className="btn-icon" 
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        const deps = task.dependencies
+                          ? task.dependencies.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean)
+                          : [];
+                        onAddQuickTask?.(task.stageName, task.id, {
+                          dependencies: deps,
+                          startDate: task.planStartDate,
+                          npdiModule: task.npdiModule
+                        }); 
+                      }}
+                      style={{ width: '26px', height: '26px' }}
+                      title="Agregar sub-tarea"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  )}
+                  
+                  {/* Delete ad-hoc / contextual task */}
+                  {onDeleteQuickTask && (
+                    <button 
+                      className="btn-icon" 
+                      onClick={(e) => handleDeleteTaskInternal(task.id, task.name, e)}
+                      style={{ width: '26px', height: '26px', color: '#ef4444' }}
+                      title="Eliminar tarea"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+
+                  {/* Drag Handle Node for Visual Dependency Connection */}
+                  {!task.isMilestone && (
+                    <div
+                      className={`template-task-drag-node ${dragState.sourceId === task.id ? 'active' : ''}`}
+                      title="Arrastra hasta otra tarea para crear una dependencia"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        handleDragStart(task.id, e, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+                      }}
+                    >
+                      <div className="inner-dot" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Nested child rendering */}

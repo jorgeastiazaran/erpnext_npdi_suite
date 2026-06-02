@@ -215,8 +215,8 @@ export default function GanttView({
         const isCritical = t.slack === 0;
         const realParentId = t.parentTaskId || t.parentId;
         const parentId = realParentId ? realParentId.toString() : stageId;
-        const hasChildren = tasks.some(child => child.parentTaskId === t.id);
-        const isGroup = hasChildren || t.isGroup;
+        const hasChildren = tasks.some(child => (child.parentTaskId === t.id || child.parentId === t.id));
+        const isGroup = hasChildren || t.isGroup || t.is_group === 1;
         const childItems = isGroup ? getRecursiveChildren(t.id) : [];
 
         // Determine start/end for group/project tasks
@@ -246,7 +246,7 @@ export default function GanttView({
         }
 
         const rawDeps = t.dependencies || t.dependsOn || [];
-        const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean);
+        const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.dependsOn?.id || (typeof d === 'string' ? d : null) || d.id)?.toString()).filter(Boolean);
 
         let barColor = 'var(--accent)';
         const status = t.status?.toLowerCase();
@@ -302,7 +302,7 @@ export default function GanttView({
           type: t.isMilestone ? 'milestone' : (isGroup ? 'project' : 'task'),
           project: parentId,
           hideChildren: collapsedIds.has(t.id.toString()),
-          dependencies: isGroup ? [] : dependencyIds,
+          dependencies: dependencyIds,
           styles: {
             progressColor: finalBarColor,
             progressSelectedColor: finalBarColor,

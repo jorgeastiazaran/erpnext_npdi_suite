@@ -18,7 +18,10 @@ before_uninstall = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.before_u
 # Ganchos de documentos transaccionales
 doc_events = {
     "Task": {
-        "before_validate": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_validate"],
+        "before_validate": [
+            "erpnext_npdi_suite.erpnext_npdi_suite.custom.task.auto_adjust_parent_dates",
+            "erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_validate"
+        ],
         "before_save": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_save"],
         # Dispara el recálculo CPM de todo el proyecto al actualizar una tarea
         "on_update": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_task_update"]
@@ -27,6 +30,9 @@ doc_events = {
         "before_insert": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.before_project_insert"],
         # Transfiere los atributos extendidos desde Project Template Task hacia las Tareas generadas
         "on_update": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.on_project_insert"]
+    },
+    "Project Template": {
+        "validate": ["erpnext_npdi_suite.api.validate_project_template_dependencies"]
     }
 }
 

@@ -56,12 +56,14 @@ def setup_property_setters():
 _NPDI_SUITE_CUSTOM_FIELDS = [
     # Project Template
     ("Project Template", "npdi_template_module"),
+    ("Project Template", "npdi_task_dependencies"),
     # Project Template Task
     ("Project Template Task", "npdi_stage_name"),
     ("Project Template Task", "npdi_module"),
     ("Project Template Task", "npdi_responsible_role"),
     ("Project Template Task", "npdi_requires_attachment"),
     ("Project Template Task", "npdi_launch_milestone"),
+    ("Project Template Task", "npdi_duration_unit"),
     ("Project Template Task", "duration"),
     # Project
     ("Project", "npdi_project_variant"),
@@ -149,6 +151,13 @@ def get_custom_fields():
                 "default": "",
                 "insert_after": "project_type",
                 "description": "Módulo NPDI al que aplica esta plantilla. Se usará para filtrar plantillas al crear un nuevo proyecto."
+            },
+            {
+                "fieldname": "npdi_task_dependencies",
+                "fieldtype": "Table",
+                "label": "Dependencies (NPDI)",
+                "options": "NPDI Template Task Dependency",
+                "insert_after": "tasks"
             }
         ],
         # ── Extensión de la plantilla nativa de tareas ───────────────────────
@@ -189,11 +198,20 @@ def get_custom_fields():
                 "insert_after": "npdi_requires_attachment"
             },
             {
+                "fieldname": "npdi_duration_unit",
+                "label": "Unidad de Duración",
+                "fieldtype": "Select",
+                "options": "days\nweeks\nmonths",
+                "default": "days",
+                "insert_after": "npdi_launch_milestone",
+                "description": "Unidad para la duración de la tarea."
+            },
+            {
                 "fieldname": "duration",
                 "label": "Duración (días)",
                 "fieldtype": "Float",
                 "default": "0",
-                "insert_after": "npdi_launch_milestone",
+                "insert_after": "npdi_duration_unit",
                 "description": "Duración de la tarea en días. Si se especifica aquí, sobreescribe la duración de la tarea vinculada al instanciar el proyecto."
             }
         ],

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import TemplateEditorView from './components/template-editor/TemplateEditorView'
 import GanttView from './GanttView'
 import ListView from './ListView'
 import { Calendar, List } from 'lucide-react'
@@ -11,8 +12,10 @@ function App() {
   const [projectMeta, setProjectMeta] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isTemplateMode, setIsTemplateMode] = useState(false);
+  const [templateData, setTemplateData] = useState<any>(null);
   const [activeView, setActiveView] = useState<'gantt' | 'list'>('gantt');
-  
+
   const fetchTasks = () => {
     let projectName: string | null = null;
     let templateName: string | null = null;
@@ -26,10 +29,34 @@ function App() {
         else if (route[1] === "Project Template") templateName = route[2];
       }
     }
-    
+
     if (!projectName && !templateName) {
       setError("No se ha proporcionado un Proyecto o Plantilla válido. Usa el botón 'Open NPDI Dashboard' desde el registro del proyecto.");
       setLoading(false);
+      return;
+    }
+
+    if (templateName) {
+      setIsTemplateMode(true);
+      // @ts-ignore
+      if (window.frappe) {
+        // @ts-ignore
+        frappe.call({
+          method: "erpnext_npdi_suite.api.get_template_editor_data",
+          args: { template: templateName },
+          callback: function (r: any) {
+            if (r.message && r.message.success) {
+              setTemplateData(r.message.data.template);
+              setTasks(r.message.data.tasks); // Hierarchical tasks
+            } else {
+              setError(r.message?.error || "Error cargando plantilla.");
+            }
+            setLoading(false);
+          }
+        });
+      } else {
+        setLoading(false);
+      }
       return;
     }
 
@@ -39,7 +66,7 @@ function App() {
       frappe.call({
         method: "erpnext_npdi_suite.api.get_project_gantt_data",
         args: { project: projectName, template: templateName },
-        callback: function(r: any) {
+        callback: function (r: any) {
           if (r.message && r.message.success) {
             setTasks(r.message.tasks);
             setProjectMeta(r.message.project_meta || null);
@@ -57,15 +84,16 @@ function App() {
     }
   };
 
+
   useEffect(() => {
     fetchTasks();
 
     // Lógica para detectar y observar el tema activo de ERPNext / Frappe
     const checkTheme = () => {
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-                     document.documentElement.getAttribute('data-color-scheme') === 'dark' ||
-                     document.documentElement.classList.contains('dark') ||
-                     document.body.classList.contains('dark');
+        document.documentElement.getAttribute('data-color-scheme') === 'dark' ||
+        document.documentElement.classList.contains('dark') ||
+        document.body.classList.contains('dark');
       setTheme(isDark ? 'dark' : 'light');
     };
 
@@ -95,15 +123,15 @@ function App() {
         frappe.call({
           method: "erpnext_npdi_suite.api.update_task_status",
           args: { task_id: taskId, status: status },
-          callback: function(r: any) {
+          callback: function (r: any) {
             if (r.message && r.message.success) {
               fetchTasks();
             }
-            resolve(r.message || {success: false});
+            resolve(r.message || { success: false });
           }
         });
       } else {
-        resolve({success: true});
+        resolve({ success: true });
       }
     });
   };
@@ -116,19 +144,68 @@ function App() {
         frappe.call({
           method: "erpnext_npdi_suite.api.update_task_dates",
           args: { task_id: taskId, start: toISODateString(start), end: toISODateString(end) },
-          callback: function(r: any) {
+          callback: function (r: any) {
             if (r.message && r.message.success) {
               fetchTasks();
             } else {
               fetchTasks();
             }
-            resolve(r.message || {success: false});
+            resolve(r.message || { success: false });
           }
         });
       } else {
-        resolve({success: true});
+        resolve({ success: true });
       }
     });
+  };
+
+  const handleUpdateTask = async (taskId: string, data: any) => {
+    return new Promise((resolve) => {
+      // @ts-ignore
+      if (window.frappe) {
+        // @ts-ignore
+        frappe.call({
+          method: "erpnext_npdi_suite.api.update_project_task",
+          args: { task_id: taskId, task_data: data },
+          callback: function (r: any) {
+            if (r.message && r.message.success) {
+              fetchTasks();
+            } else {
+              alert(r.message?.error || "Error al actualizar la tarea.");
+            }
+            resolve(r.message || { success: false });
+          }
+        });
+      } else {
+        resolve({ success: true });
+      }
+    });
+  };
+
+  const handleRecalculateCpm = async () => {
+    const proj = new URLSearchParams(window.location.search).get('project') || window.frappe?.get_route()[2];
+    if (!proj) return;
+    setLoading(true);
+    // @ts-ignore
+    if (window.frappe) {
+      // @ts-ignore
+      frappe.call({
+        method: "erpnext_npdi_suite.api.recalculate_cpm",
+        args: { project: proj },
+        callback: function (r: any) {
+          if (r.message && r.message.success) {
+            // @ts-ignore
+            frappe.show_alert({ message: r.message.message || "Ruta crítica recalculada.", indicator: "green" });
+            fetchTasks();
+          } else {
+            alert(r.message?.error || "Error al recalcular la ruta crítica.");
+            setLoading(false);
+          }
+        }
+      });
+    } else {
+      setTimeout(() => setLoading(false), 500);
+    }
   };
 
   const handleAddQuickTask = (
@@ -172,19 +249,19 @@ function App() {
         frappe.call({
           method: "erpnext_npdi_suite.api.delete_task",
           args: { task_id: taskId },
-          callback: function(r: any) {
+          callback: function (r: any) {
             if (r.message && r.message.success) {
               fetchTasks();
             } else {
               alert(r.message?.error || "Error al eliminar la tarea.");
             }
-            resolve(r.message || {success: false});
+            resolve(r.message || { success: false });
           }
         });
       } else {
         // Mock fallback
         setTasks(prev => prev.filter(t => t.id !== taskId));
-        resolve({success: true});
+        resolve({ success: true });
       }
     });
   };
@@ -197,13 +274,13 @@ function App() {
         frappe.call({
           method: "erpnext_npdi_suite.api.add_task_dependency",
           args: { task_id: taskId, depends_on: dependsOnId },
-          callback: function(r: any) {
+          callback: function (r: any) {
             if (r.message && r.message.success) {
               fetchTasks();
             } else {
               alert(r.message?.error || "Error al agregar dependencia.");
             }
-            resolve(r.message || {success: false});
+            resolve(r.message || { success: false });
           }
         });
       } else {
@@ -216,7 +293,7 @@ function App() {
           }
           return t;
         }));
-        resolve({success: true});
+        resolve({ success: true });
       }
     });
   };
@@ -229,13 +306,13 @@ function App() {
         frappe.call({
           method: "erpnext_npdi_suite.api.update_task_status",
           args: { task_id: taskId, status: isSkip ? 'Cancelled' : 'Open' },
-          callback: function(r: any) {
+          callback: function (r: any) {
             if (r.message && r.message.success) {
               fetchTasks();
             } else {
               alert(r.message?.error || "Error al actualizar la tarea.");
             }
-            resolve(r.message || {success: false});
+            resolve(r.message || { success: false });
           }
         });
       } else {
@@ -245,7 +322,7 @@ function App() {
           }
           return t;
         }));
-        resolve({success: true});
+        resolve({ success: true });
       }
     });
   };
@@ -259,7 +336,7 @@ function App() {
       frappe.call({
         method: "erpnext_npdi_suite.api.capture_project_baseline",
         args: { project_name: projectMeta.name },
-        callback: function(r: any) {
+        callback: function (r: any) {
           if (r.message && r.message.success) {
             // @ts-ignore
             frappe.show_alert({ message: r.message.message || "Línea base capturada.", indicator: "green" });
@@ -276,22 +353,54 @@ function App() {
     }
   };
 
+  
+  if (isTemplateMode && templateData) {
+    const roles = ["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => ({name: r, id: r}));
+    return (
+      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+        <TemplateEditorView template={{ ...templateData, tasks: tasks }} allRoles={roles} onRefresh={fetchTasks} />
+      </div>
+    );
+  }
+
   return (
     <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
-      
+
       {/* Header and Switcher Section */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <h2 style={{ margin: 0, color: 'var(--text-h)' }}>NPDI Project Timeline</h2>
-        
-        {/* Premium View Switcher Button Group */}
-        <div style={{ 
-          display: 'flex', 
-          background: 'var(--bg-surface-2)', 
-          border: '1px solid var(--border)', 
-          borderRadius: '8px', 
-          padding: '2px', 
-          boxShadow: 'var(--shadow)' 
-        }}>
+
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Recalculate Button */}
+          <button
+            onClick={handleRecalculateCpm}
+            disabled={loading}
+            style={{
+              padding: '6px 14px',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              background: 'var(--bg-surface)',
+              color: 'var(--text-secondary)',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            {loading ? 'Calculando...' : 'Recalcular Ruta Crítica'}
+          </button>
+
+          {/* Premium View Switcher Button Group */}
+          <div style={{
+            display: 'flex',
+            background: 'var(--bg-surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            padding: '2px',
+            boxShadow: 'var(--shadow)'
+          }}>
           <button
             onClick={() => setActiveView('gantt')}
             style={{
@@ -335,11 +444,12 @@ function App() {
             Vista de Lista
           </button>
         </div>
+        </div>
       </div>
 
       {activeView === 'gantt' ? (
-        <GanttView 
-          tasks={tasks} 
+        <GanttView
+          tasks={tasks}
           onTaskClick={handleTaskClick}
           onStatusChange={handleStatusChange}
           onDateChange={handleDateChange}
@@ -348,14 +458,15 @@ function App() {
           onCaptureBaseline={handleCaptureBaseline}
         />
       ) : (
-        <ListView 
-          tasks={tasks} 
+        <ListView
+          tasks={tasks}
           onTaskClick={handleTaskClick}
           onStatusChange={handleStatusChange}
           onAddQuickTask={handleAddQuickTask}
           onDeleteQuickTask={handleDeleteTask}
           onAddTaskDependency={handleAddTaskDependency}
           onSkipTask={handleSkipTask}
+          onUpdateTask={handleUpdateTask}
         />
       )}
     </div>

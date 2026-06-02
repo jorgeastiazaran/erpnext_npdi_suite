@@ -29,13 +29,31 @@ class CPMEngine:
             # Construye jerarquía de padres/hijos
             if doc.parent_task:
                 self.children.setdefault(doc.parent_task, []).append(t.name)
-                
+
+        # Build ancestry map to detect parent-child cycles
+        ancestry = {}
+        def get_ancestors(t):
+            if t in ancestry: return ancestry[t]
+            p = self.tasks[t].get("parent_task")
+            if not p:
+                ancestry[t] = set()
+            else:
+                ancestry[t] = {p} | get_ancestors(p)
+            return ancestry[t]
+            
+        for t in self.tasks:
+            get_ancestors(t)
+
+        for t_name, doc in self.tasks.items():
             # Construye la red desde la tabla hija nativa 'depends_on'
             if doc.get("depends_on"):
                 for dep in doc.depends_on:
                     if dep.task:
-                        self.predecessors[t.name].append(dep.task)
-                        self.successors[dep.task].append(t.name)
+                        # Ignorar dependencias entre un ancestro y su descendiente
+                        if dep.task in ancestry.get(t_name, set()) or t_name in ancestry.get(dep.task, set()):
+                            continue
+                        self.predecessors[t_name].append(dep.task)
+                        self.successors[dep.task].append(t_name)
 
     def resolve_group_statuses(self):
         """Resuelve recursivamente el estatus de las tareas grupo basándose en sus hijos."""
@@ -100,7 +118,16 @@ class CPMEngine:
             self._forward_pass(task_name)
 
         # Pasada hacia atrás (LS / LF)
-        end_tasks = [t for t in self.tasks if not self.successors.get(t)]
+        # Un nodo es verdaderamente terminal si ni él ni ninguno de sus padres tiene sucesores.
+        def has_any_successor(task_name):
+            if self.successors.get(task_name):
+                return True
+            parent = self.tasks[task_name].get("parent_task")
+            if parent and has_any_successor(parent):
+                return True
+            return False
+
+        end_tasks = [t for t in self.tasks if not has_any_successor(t)]
         if not end_tasks:
             end_tasks = list(self.tasks.keys()) # Respaldo para redes circulares
 
@@ -111,14 +138,23 @@ class CPMEngine:
                 self.lf[t] = max_ef
                 self.ls[t] = add_to_date(max_ef, hours=-self._duration_hours(t))
 
-        visited = set()
-        for t in end_tasks:
-            self._backward_pass(t, visited)
+        # El hito de lanzamiento siempre dicta su propia ruta crítica hacia atrás
+        # Aseguramos que su LF sea exactamente su EF, para que tenga holgura 0.
+        launch_milestone_task = None
+        for t_name, doc in self.tasks.items():
+            if int(doc.get("npdi_launch_milestone") or 0):
+                launch_milestone_task = t_name
+                if t_name in self.ef:
+                    self.lf[t_name] = self.ef[t_name]
+                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
+                break
+
+        self._backward_pass(end_tasks)
 
         # Cálculo de holgura y ruta crítica
         for t in self.tasks:
             if t in self.ls and t in self.es:
-                self.float[t] = (self.ls[t] - self.es[t]).total_seconds() / 3600.0
+                self.float[t] = (self.ls[t] - self.es[t]).total_seconds() / (3600.0 * 24.0)
                 self.is_critical[t] = self.float[t] <= 0.0
             else:
                 self.float[t] = 0.0
@@ -164,6 +200,11 @@ class CPMEngine:
         if milestone_dates:
             latest_milestone_date = max(milestone_dates)
             frappe.db.set_value("Project", self.project_name, "expected_end_date", latest_milestone_date)
+        else:
+            # Fallback: if no milestones exist, the project ends when the absolute last task finishes
+            if self.ef:
+                absolute_latest_date = max(self.ef.values()).date()
+                frappe.db.set_value("Project", self.project_name, "expected_end_date", absolute_latest_date)
 
     def _duration_hours(self, task_name):
         doc = self.tasks[task_name]
@@ -230,49 +271,81 @@ class CPMEngine:
         for succ in self.successors.get(task_name, []):
             self._forward_pass(succ)
 
-    def _backward_pass(self, task_name, visited):
-        if task_name in visited:
-            return
-        visited.add(task_name)
+    def _backward_pass(self, end_tasks):
+        # Inicializar todos los nodos
+        for t in self.tasks:
+            self.lf[t] = self.project_end
+            self.ls[t] = add_to_date(self.project_end, hours=-self._duration_hours(t))
+            
+        # El hito de lanzamiento se clava en su EF
+        for t_name, doc in self.tasks.items():
+            if int(doc.get("npdi_launch_milestone") or 0):
+                if t_name in self.ef:
+                    self.lf[t_name] = self.ef[t_name]
+                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
+            elif doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_end"):
+                manual_lf = get_datetime(doc.npdi_manual_end)
+                if manual_lf < self.lf[t_name]:
+                    self.lf[t_name] = manual_lf
+                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
+
+        # Relajación iterativa (Bellman-Ford adaptado para CPM)
+        # Esto asegura que sin importar el orden topológico, las restricciones se propagan correctamente
+        changed = True
+        iterations = 0
+        max_iterations = len(self.tasks) + 10
         
-        doc = self.tasks[task_name]
-        if doc.get("is_group"):
-            children = self.children.get(task_name, [])
-            for child in children:
-                self._backward_pass(child, visited)
-            if children:
-                valid_lss = [self.ls[c] for c in children if c in self.ls]
-                valid_lfs = [self.lf[c] for c in children if c in self.lf]
-                self.ls[task_name] = min(valid_lss) if valid_lss else self.es[task_name]
-                self.lf[task_name] = max(valid_lfs) if valid_lfs else self.ef[task_name]
-            else:
-                self.ls[task_name] = self.es[task_name]
-                self.lf[task_name] = self.ef[task_name]
-            return
-
-        successors = self.successors.get(task_name, [])
-        for s in successors:
-            self._backward_pass(s, visited)
-
-        if successors:
-            valid_lss = [self.ls[s] for s in successors if s in self.ls]
-            if valid_lss:
-                self.lf[task_name] = min(valid_lss)
-                self.ls[task_name] = add_to_date(self.lf[task_name], hours=-self._duration_hours(task_name))
-
-        if task_name not in self.lf:
-            self.lf[task_name] = self.project_end
-            self.ls[task_name] = add_to_date(self.lf[task_name], hours=-self._duration_hours(task_name))
-        
-        doc = self.tasks[task_name]
-        if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_end"):
-            manual_lf = get_datetime(doc.npdi_manual_end)
-            if task_name in self.lf and manual_lf < self.lf[task_name]:
-                self.lf[task_name] = manual_lf
-                self.ls[task_name] = add_to_date(manual_lf, hours=-self._duration_hours(task_name))
-
-        for p in self.predecessors.get(task_name, []):
-            self._backward_pass(p, visited)
+        while changed and iterations < max_iterations:
+            changed = False
+            iterations += 1
+            
+            for task_name, doc in self.tasks.items():
+                old_lf = self.lf[task_name]
+                new_lf = old_lf
+                
+                # 1. Restricción por sucesores directos
+                successors = self.successors.get(task_name, [])
+                if successors:
+                    valid_lss = [self.ls[s] for s in successors if s in self.ls]
+                    if valid_lss:
+                        min_succ_ls = min(valid_lss)
+                        if min_succ_ls < new_lf:
+                            new_lf = min_succ_ls
+                            
+                # 2. Restricción por ser hijo de un grupo (hereda el LF del padre)
+                parent_task = doc.get("parent_task")
+                if parent_task and parent_task in self.lf:
+                    if self.lf[parent_task] < new_lf:
+                        new_lf = self.lf[parent_task]
+                        
+                # 3. Restricción por ser padre de hijos (el padre debe terminar cuando menos cuando el último hijo termine)
+                # OJO: En la pasada hacia atrás, el padre DEBE darles espacio a sus hijos, así que su LF empuja el de los hijos (punto 2).
+                # Pero si los hijos están empujados por otra cosa, el LF del padre no debe cambiar a menos que sea forzado por SUS propios sucesores.
+                # Por lo tanto, el LF del padre es determinado por sus sucesores (Punto 1).
+                # Sin embargo, para mantener coherencia, el LF real del grupo se recalculará al final basado en sus hijos.
+                
+                # Proteger el hito de lanzamiento
+                if int(doc.get("npdi_launch_milestone") or 0):
+                    if task_name in self.ef and new_lf < self.ef[task_name]:
+                        new_lf = self.ef[task_name]
+                        
+                if new_lf < old_lf:
+                    self.lf[task_name] = new_lf
+                    self.ls[task_name] = add_to_date(new_lf, hours=-self._duration_hours(task_name))
+                    changed = True
+                    
+        # Pasada final para ajustar Grupos (Padres)
+        # El LF de un grupo es formalmente el máximo LF de sus hijos (siempre que respete su límite)
+        for task_name, doc in self.tasks.items():
+            if doc.get("is_group"):
+                children = self.children.get(task_name, [])
+                if children:
+                    valid_lfs = [self.lf[c] for c in children if c in self.lf]
+                    valid_lss = [self.ls[c] for c in children if c in self.ls]
+                    if valid_lfs:
+                        self.lf[task_name] = max(valid_lfs)
+                    if valid_lss:
+                        self.ls[task_name] = min(valid_lss)
 
 
 def before_project_insert(doc, method):
@@ -311,6 +384,18 @@ def on_task_update(doc, method):
         try:
             engine = CPMEngine(doc.project)
             engine.compute()
+            
+            # Sincroniza los valores calculados de vuelta a la instancia en memoria
+            # para que la interfaz web (al hacer Guardar) se actualice sin requerir recargar la página
+            if doc.name in engine.tasks:
+                cpm_doc = engine.tasks[doc.name]
+                doc.npdi_cpm_is_critical = cpm_doc.npdi_cpm_is_critical
+                doc.npdi_cpm_total_float = cpm_doc.npdi_cpm_total_float
+                doc.npdi_cpm_early_start = cpm_doc.npdi_cpm_early_start
+                doc.npdi_cpm_early_finish = cpm_doc.npdi_cpm_early_finish
+                doc.npdi_cpm_late_start = cpm_doc.npdi_cpm_late_start
+                doc.npdi_cpm_late_finish = cpm_doc.npdi_cpm_late_finish
+                
         except Exception as e:
             frappe.log_error(f"Error CPM en on_task_update: {str(e)}", "NPD CPM Error")
         finally:
@@ -415,52 +500,75 @@ def on_project_insert(doc, method):
             "npdi_launch_milestone": int(tmpl.npdi_launch_milestone or 0),
         })
 
-    # ── [P2] Propagate dependency graph from Project Template Task depends_on ─
-    # Check whether the Project Template Task doctype has a depends_on child table.
-    # In ERPNext v13 this is "Task Template Depends On" with a `task` Link field.
-    template_has_depends_on = frappe.db.exists(
-        "DocType", "Task Template Depends On"
-    )
+    # ── [P2] Propagate dependency graph from Project Template custom tables ─
+    template_name = doc.get("project_template")
+    template_doc = frappe.get_doc("Project Template", template_name)
 
-    if template_has_depends_on:
-        for tmpl in template_tasks:
-            target_task_name = (
-                tmpl_task_record_to_generated.get(tmpl.name)
-                or tmpl_task_record_to_generated.get(tmpl.task)
-            )
-            if not target_task_name:
+    # Dictionary to collect all dependencies (target_task_name -> set of depends_on_task_names)
+    deps_to_append = {}
+    def add_dep(target, depends_on):
+        if target and depends_on and target != depends_on:
+            if target not in deps_to_append:
+                deps_to_append[target] = set()
+            deps_to_append[target].add(depends_on)
+
+    # 1. Process npdi_task_dependencies (Parent-Task-to-Parent-Task, Milestone-to-Task, etc.)
+    if hasattr(template_doc, "npdi_task_dependencies"):
+        for dep in template_doc.npdi_task_dependencies:
+            target_generated_name = tmpl_task_record_to_generated.get(dep.task)
+            depends_on_generated_name = tmpl_task_record_to_generated.get(dep.depends_on)
+            add_dep(target_generated_name, depends_on_generated_name)
+
+    # 2. Process npdi_stage_dependencies (Stage-to-Stage, Stage-to-Milestone)
+    if hasattr(template_doc, "npdi_stage_dependencies"):
+        for dep in template_doc.npdi_stage_dependencies:
+            # Find all target generated tasks in the dependent stage
+            target_tasks = []
+            for tmpl in template_tasks:
+                if tmpl.npdi_stage_name == dep.stage:
+                    gen_name = tmpl_task_record_to_generated.get(tmpl.name)
+                    if gen_name:
+                        target_tasks.append(gen_name)
+            
+            # Find all upstream generated tasks it depends on
+            upstream_tasks = []
+            if dep.depends_on_row_name:
+                # Stage depends on a specific task/milestone
+                upstream = tmpl_task_record_to_generated.get(dep.depends_on_row_name)
+                if upstream:
+                    upstream_tasks.append(upstream)
+            elif dep.depends_on_stage:
+                # Stage depends on ALL tasks (or the milestone) of another stage
+                # We will map it to ALL tasks of the upstream stage to ensure strict precedence
+                for tmpl in template_tasks:
+                    if tmpl.npdi_stage_name == dep.depends_on_stage:
+                        gen_name = tmpl_task_record_to_generated.get(tmpl.name)
+                        if gen_name:
+                            upstream_tasks.append(gen_name)
+
+            # Map them together
+            for t_task in target_tasks:
+                for u_task in upstream_tasks:
+                    add_dep(t_task, u_task)
+
+    # 3. Append to the actual instantiated Task documents
+    for target_task_name, depends_on_set in deps_to_append.items():
+        target_doc = frappe.get_doc("Task", target_task_name)
+        existing_dep_ids = {d.task for d in (target_doc.depends_on or [])}
+        
+        added = False
+        for dep_generated_name in depends_on_set:
+            if dep_generated_name in existing_dep_ids:
                 continue
-
-            # Read dependency rows from the template task row
-            tmpl_dep_rows = frappe.get_all(
-                "Task Template Depends On",
-                filters={"parent": tmpl.name},
-                fields=["task"],
-            )
-            if not tmpl_dep_rows:
-                continue
-
-            # Load the target task document to append dependencies
-            target_doc = frappe.get_doc("Task", target_task_name)
-            existing_dep_ids = {d.task for d in (target_doc.depends_on or [])}
-
-            added = False
-            for dep_row in tmpl_dep_rows:
-                # dep_row.task is a Project Template Task record name
-                dep_generated_name = tmpl_task_record_to_generated.get(dep_row.task)
-                if not dep_generated_name:
-                    continue
-                if dep_generated_name in existing_dep_ids:
-                    continue
-                target_doc.append("depends_on", {
-                    "task": dep_generated_name,
-                    "subject": generated_name_to_subject.get(dep_generated_name, ""),
-                })
-                existing_dep_ids.add(dep_generated_name)
-                added = True
-
-            if added:
-                target_doc.save(ignore_permissions=True)
+            target_doc.append("depends_on", {
+                "task": dep_generated_name,
+                "subject": generated_name_to_subject.get(dep_generated_name, ""),
+            })
+            existing_dep_ids.add(dep_generated_name)
+            added = True
+            
+        if added:
+            target_doc.save(ignore_permissions=True)
 
     # ── Populate `subject` on all Task Depends On rows for UI display ────────
     dep_rows = frappe.db.sql("""

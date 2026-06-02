@@ -1,0 +1,33 @@
+{
+ "autoname": "hash",
+ "creation": "2025-04-10 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "task",
+   "fieldtype": "Link",
+   "label": "Tarea",
+   "options": "Project Template Task",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "depends_on",
+   "fieldtype": "Link",
+   "label": "Depende de",
+   "options": "Project Template Task",
+   "reqd": 1,
+   "in_list_view": 1
+  }
+ ],
+ "istable": 1,
+ "modified": "2025-04-10 10:00:00.000000",
+ "module": "erpnext_npdi_suite",
+ "name": "NPDI Template Task Dependency",
+ "owner": "Administrator",
+ "permissions": [],
+ "custom": 0,
+ "track_changes": 1
+}
