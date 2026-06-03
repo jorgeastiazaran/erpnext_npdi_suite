@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import TemplateEditorView from './components/template-editor/TemplateEditorView'
 import GanttView from './GanttView'
 import ListView from './ListView'
-import { Calendar, List } from 'lucide-react'
+import { Calendar, List, ChevronRight } from 'lucide-react'
 import './App.css'
 import { toISODateString } from './dateUtils'
 
@@ -367,8 +367,25 @@ function App() {
     <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
 
       {/* Header and Switcher Section */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <h2 style={{ margin: 0, color: 'var(--text-h)' }}>NPDI Project Timeline</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'var(--text-muted)', fontSize: '12px', marginBottom: 'var(--space-2)' }}>
+            <span>Proyectos NPDI</span>
+            <ChevronRight size={12} />
+            <span>{projectMeta?.name || 'Cargando...'}</span>
+          </div>
+          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 8px 0' }}>
+            {projectMeta?.name || 'NPDI Project Timeline'}
+          </h1>
+          {projectMeta && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
+                <Calendar size={14} />
+                Lanzamiento Objetivo: {projectMeta.target_launch_date ? new Date(projectMeta.target_launch_date).toLocaleDateString() : 'Por definir'}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           {/* Recalculate Button */}

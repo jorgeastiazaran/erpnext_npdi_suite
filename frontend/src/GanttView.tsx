@@ -1,19 +1,12 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-// import { useRouter } from 'next/navigation';
-// import { updateTaskDates, addTaskDependency } from '@/app/actions/taskActions';
-
 import { Gantt, ViewMode } from 'gantt-task-react';
 import type { Task } from 'gantt-task-react';
 import "gantt-task-react/dist/index.css";
 
-// Polyfill Next.js router
-const useRouter = () => ({ refresh: () => window.location.reload() });
-const updateTaskDates = async () => ({ success: false, error: 'API no implementada' });
-
 import { Check, AlertCircle, ChevronDown, Maximize2, Minimize2, Target, Plus, Trash2, Maximize, Minimize } from 'lucide-react';
-import { parseLocalDate } from './dateUtils';
+
 
 interface GanttViewProps {
   tasks: any[]; // The tasks from our scheduler/Prisma
@@ -21,23 +14,13 @@ interface GanttViewProps {
   onDateChange?: (taskId: string, start: Date, end: Date) => Promise<any>;
   onStatusChange?: (taskId: string, status: string) => Promise<any>;
   selectedTaskId?: string | null;
-  onAddQuickTask?: (
-    stageName: string,
-    parentTaskId: string | null,
-    inheritedData?: {
-      dependencies?: string[];
-      startDate?: string;
-      npdiModule?: string;
-    }
-  ) => void;
+  onAddQuickTask?: (stageName: string, parentTaskId: number | null) => void;
   onDeleteQuickTask?: (taskId: string) => void;
-  projectMeta?: { name: string; npdi_baseline_locked: number } | null;
-  onCaptureBaseline?: () => Promise<any>;
 }
 
 export default function GanttView({ 
   tasks, onTaskClick, onDateChange, onStatusChange, selectedTaskId,
-  onAddQuickTask, onDeleteQuickTask, projectMeta, onCaptureBaseline 
+  onAddQuickTask, onDeleteQuickTask 
 }: GanttViewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Week);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -123,15 +106,12 @@ export default function GanttView({
     const summaries: Record<string, Record<string, number>> = {};
     
     tasks.forEach(t => {
-      const s = t.status || 'Open';
+      const s = t.status || 'Pending';
       const stageId = `stage-${(t.stageName || 'General').toLowerCase().replace(/\s+/g, '-')}`;
       
       const updateCount = (id: string) => {
         if (!summaries[id]) {
-          summaries[id] = { 
-            'Open': 0, 'Working': 0, 'Pending Review': 0, 'Completed': 0, 'Overdue': 0, 'Cancelled': 0,
-            'Pending': 0, 'In Progress': 0, 'Awaiting Approval': 0, 'Blocked': 0 
-          };
+          summaries[id] = { 'Pending': 0, 'In Progress': 0, 'Awaiting Approval': 0, 'Completed': 0, 'Blocked': 0 };
         }
         summaries[id][s] = (summaries[id][s] || 0) + 1;
       };
@@ -144,20 +124,6 @@ export default function GanttView({
 
   // Map our tasks to gantt-task-react format
   const ganttTasks: Task[] = useMemo(() => {
-    // Recursive children helper
-    const getRecursiveChildren = (parentId: string | number): any[] => {
-      let result: any[] = [];
-      const directChildren = tasks.filter(child => child.parentTaskId === parentId);
-      for (const child of directChildren) {
-        result.push(child);
-        const childHasChildren = tasks.some(c => c.parentTaskId === child.id);
-        if (childHasChildren) {
-          result = result.concat(getRecursiveChildren(child.id));
-        }
-      }
-      return result;
-    };
-
     const grouped = tasks.reduce((acc, t) => {
       const stage = t.stageName || 'General';
       if (!acc[stage]) acc[stage] = [];
@@ -174,40 +140,23 @@ export default function GanttView({
 
       if (sortedStageTasks.length === 0) return;
 
-      const stageStart = new Date(Math.min(...sortedStageTasks.map(t => parseLocalDate(t.planStartDate).getTime())));
-      const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => parseLocalDate(t.planEndDate).getTime())));
-
-      // Calculate stage status colors dynamically based on child tasks
-      const hasStageAnyStarted = sortedStageTasks.some(t => {
-        const s = t.status?.toLowerCase();
-        return s === 'completed' || s === 'working' || s === 'in progress' || s === 'blocked' || s === 'awaiting approval' || s === 'pending review' || s === 'overdue' || s === 'cancelled';
-      });
-      const isStageCompleted = sortedStageTasks.every(t => t.status === 'Completed');
-      
-      let stageStatusColor = '#9ca3af'; // gray
-      let stageProgress = 0;
-      if (isStageCompleted) {
-        stageStatusColor = '#22c55e'; // green
-        stageProgress = 100;
-      } else if (hasStageAnyStarted) {
-        stageStatusColor = 'var(--accent)'; // blue
-        stageProgress = 50;
-      }
+      const stageStart = new Date(Math.min(...sortedStageTasks.map(t => new Date(t.planStartDate).getTime())));
+      const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => new Date(t.planEndDate).getTime())));
 
       finalTasks.push({
         id: stageId,
         name: stageName.toUpperCase(),
         start: stageStart,
         end: stageEnd,
-        progress: stageProgress,
+        progress: sortedStageTasks.every(t => t.status === 'Completed') ? 100 : 0,
         type: 'project',
         hideChildren: collapsedIds.has(stageId),
         displayOrder: currentDisplayOrder++,
         styles: {
-          backgroundColor: stageStatusColor,
-          backgroundSelectedColor: stageStatusColor,
-          progressColor: stageStatusColor,
-          progressSelectedColor: stageStatusColor,
+          backgroundColor: 'rgba(0, 0, 0, 0.05)',
+          backgroundSelectedColor: 'rgba(0, 0, 0, 0.1)',
+          progressColor: 'var(--accent)',
+          progressSelectedColor: 'var(--accent)',
         }
       });
 
@@ -215,46 +164,18 @@ export default function GanttView({
         const isCritical = t.slack === 0;
         const realParentId = t.parentTaskId || t.parentId;
         const parentId = realParentId ? realParentId.toString() : stageId;
-        const hasChildren = tasks.some(child => (child.parentTaskId === t.id || child.parentId === t.id));
-        const isGroup = hasChildren || t.isGroup || t.is_group === 1;
-        const childItems = isGroup ? getRecursiveChildren(t.id) : [];
-
-        // Determine start/end for group/project tasks
-        let taskStart: Date;
-        let taskEnd: Date;
-
-        if (isGroup) {
-          // Filter children with valid start dates
-          const validStarts = childItems
-            .map(c => parseLocalDate(c.planStartDate))
-            .filter(d => d && !isNaN(d.getTime()));
-          // Filter children with valid end dates
-          const validEnds = childItems
-            .map(c => parseLocalDate(c.planEndDate))
-            .filter(d => d && !isNaN(d.getTime()));
-
-          // Fallback to parent's own dates if no valid children dates
-          taskStart = validStarts.length > 0
-            ? new Date(Math.min(...validStarts.map(d => d.getTime())))
-            : parseLocalDate(t.planStartDate);
-          taskEnd = validEnds.length > 0
-            ? new Date(Math.max(...validEnds.map(d => d.getTime())))
-            : parseLocalDate(t.planEndDate);
-        } else {
-          taskStart = parseLocalDate(t.planStartDate);
-          taskEnd = parseLocalDate(t.planEndDate);
-        }
-
+        const hasChildren = tasks.some(child => child.parentTaskId === t.id);
+        
         const rawDeps = t.dependencies || t.dependsOn || [];
-        const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.dependsOn?.id || (typeof d === 'string' ? d : null) || d.id)?.toString()).filter(Boolean);
+        const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean);
 
         let barColor = 'var(--accent)';
         const status = t.status?.toLowerCase();
         
         if (status === 'completed') barColor = '#22c55e'; // Green
-        else if (status === 'overdue' || status === 'blocked' || status === 'cancelled') barColor = 'var(--status-blocked-text)'; // Red
-        else if (status === 'pending review' || status === 'awaiting approval') barColor = 'var(--status-concept-text)'; // Amber
-        else if (status === 'working' || status === 'in progress') barColor = 'var(--accent)'; // Blue
+        else if (status === 'blocked') barColor = 'var(--status-blocked-text)'; // Red
+        else if (status === 'awaiting approval') barColor = 'var(--status-concept-text)'; // Amber
+        else if (status === 'in progress') barColor = 'var(--accent)'; // Blue
         else if (isCritical) barColor = 'var(--status-blocked-text)'; // Critical = Red
         else {
           const stage = (t.stageName || '').toLowerCase();
@@ -265,67 +186,33 @@ export default function GanttView({
           else if (stage.includes('post')) barColor = 'var(--status-post-text)';
         }
 
-        let taskProgress = 0;
-        let finalBarColor = barColor;
-        let finalBgColor = 'rgba(0,0,0,0.05)';
-        
-        if (isGroup) {
-          const isAllCompleted = childItems.length > 0 && childItems.every(c => c.status?.toLowerCase() === 'completed');
-          const isAnyStarted = childItems.some(c => {
-            const s = c.status?.toLowerCase();
-            return s === 'completed' || s === 'working' || s === 'in progress' || s === 'blocked' || s === 'awaiting approval' || s === 'pending review' || s === 'overdue' || s === 'cancelled';
-          });
-          
-          if (isAllCompleted) {
-            finalBarColor = '#22c55e'; // Green
-            taskProgress = 100;
-          } else if (isAnyStarted) {
-            finalBarColor = 'var(--accent)'; // Blue
-            taskProgress = 50;
-          } else {
-            finalBarColor = '#9ca3af'; // Gray
-            taskProgress = 0;
-          }
-          finalBgColor = finalBarColor;
-        } else {
-          taskProgress = status === 'completed' ? 100 : (status === 'working' || status === 'in progress' ? 50 : 0);
-          finalBarColor = barColor;
-          finalBgColor = (status === 'overdue' || status === 'blocked' || status === 'cancelled') ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)';
-        }
-
         finalTasks.push({
           id: t.id.toString(),
           name: isCritical && status !== 'completed' ? `🔥 ${t.name}` : t.name,
-          start: taskStart,
-          end: taskEnd,
-          progress: taskProgress,
-          type: t.isMilestone ? 'milestone' : (isGroup ? 'project' : 'task'),
+          start: new Date(t.planStartDate),
+          end: new Date(t.planEndDate),
+          progress: status === 'completed' ? 100 : (status === 'in progress' ? 50 : 0),
+          type: t.isMilestone ? 'milestone' : (hasChildren ? 'project' : 'task'),
           project: parentId,
           hideChildren: collapsedIds.has(t.id.toString()),
           dependencies: dependencyIds,
           styles: {
-            progressColor: finalBarColor,
-            progressSelectedColor: finalBarColor,
-            backgroundColor: finalBgColor,
-            backgroundSelectedColor: finalBgColor,
+            progressColor: barColor,
+            progressSelectedColor: barColor,
+            backgroundColor: status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
           },
           displayOrder: currentDisplayOrder++,
           isDisabled: t.isSkipped,
           fontSize: '11px',
-          // Custom properties for sub-task inheritance
-          npdiModule: t.npdiModule,
-          rawDependencies: dependencyIds,
-          rawStartDate: t.planStartDate,
-          stageName: t.stageName,
-        } as any);
+        });
 
         // Phase 6G: Add ghost task for Baseline if toggled on
-        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate) {
+        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate && t.baselineStartDate !== t.planStartDate) {
           finalTasks.push({
             id: `baseline-${t.id}`,
             name: `[Base] ${t.name}`,
-            start: parseLocalDate(t.baselineStartDate),
-            end: parseLocalDate(t.baselineEndDate),
+            start: new Date(t.baselineStartDate),
+            end: new Date(t.baselineEndDate),
             progress: 100,
             type: 'task',
             project: parentId,
@@ -344,38 +231,19 @@ export default function GanttView({
         }
       });
     });
-    // Filter out tasks whose ancestors are collapsed
-    const visibleTasks = finalTasks.filter(t => {
-      if (!t.project) return true;
-      let currParentId: string | undefined = t.project;
-      while (currParentId) {
-        if (collapsedIds.has(currParentId)) {
-          return false;
-        }
-        const parentTask = finalTasks.find(x => x.id === currParentId);
-        currParentId = parentTask?.project;
-      }
-      return true;
-    });
 
-    // Re-assign displayOrder sequentially to avoid gaps
-    const visibleWithOrder = visibleTasks.map((t, index) => ({
-      ...t,
-      displayOrder: index + 1
-    }));
-
-    return visibleWithOrder.filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()));
+    return finalTasks.filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()));
   }, [tasks, collapsedIds, showBaseline]);
 
   const handleTaskChange = async (task: Task) => {
-    if (task.id && !task.id.startsWith('stage-')) {
+    if (!isNaN(parseInt(task.id))) {
       const originalTask = tasks.find(t => t.id.toString() === task.id);
       
       if (originalTask) {
         // Normalize dates to mid-night for safe comparison to avoid timezone shift issues during drag
-        const originalStart = parseLocalDate(originalTask.planStartDate);
+        const originalStart = new Date(originalTask.planStartDate);
         originalStart.setHours(0, 0, 0, 0);
-        const newStart = parseLocalDate(task.start);
+        const newStart = new Date(task.start);
         newStart.setHours(0, 0, 0, 0);
 
         if (originalStart.getTime() !== newStart.getTime() && !originalTask.isFixed) {
@@ -386,12 +254,14 @@ export default function GanttView({
         }
       }
 
-      const fn = onDateChange || updateTaskDates;
-      const res = await fn(task.id, task.start, task.end);
-      if (res.success) router.refresh();
-      else {
-        alert(res.error || 'Error al actualizar las fechas');
-        router.refresh();
+      const fn = onDateChange;
+      if (fn) {
+        const res = await fn(task.id, task.start, task.end);
+        if (res?.success) router.refresh();
+        else {
+          alert(res?.error || 'Error al actualizar las fechas');
+          router.refresh();
+        }
       }
     }
   };
@@ -478,7 +348,7 @@ export default function GanttView({
           left: 0,
           right: 0,
           bottom: 0,
-          zIndex: 99999,
+          zIndex: 9999,
           display: 'flex',
           flexDirection: 'column'
         } : {})
@@ -562,7 +432,7 @@ export default function GanttView({
               </button>
             </div>
             
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '4px' }}>
               <button 
                 className={`btn ${showBaseline ? 'btn-primary' : 'btn-ghost'}`}
                 style={{ fontSize: '11px', padding: '4px 8px' }}
@@ -570,21 +440,6 @@ export default function GanttView({
               >
                 Baseline
               </button>
-              {projectMeta && (
-                projectMeta.npdi_baseline_locked === 1 ? (
-                  <span style={{ fontSize: '11px', padding: '4px 8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--text-muted)' }}>
-                    <Check size={12} style={{ color: '#22c55e' }} /> Línea Base Congelada
-                  </span>
-                ) : (
-                  <button 
-                    className="btn btn-ghost"
-                    style={{ fontSize: '11px', padding: '4px 8px', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-                    onClick={onCaptureBaseline}
-                  >
-                    Capturar Línea Base
-                  </button>
-                )
-              )}
             </div>
           </div>
         </div>
@@ -605,7 +460,6 @@ export default function GanttView({
       
       <div style={{ padding: '1px', flex: isFullscreen ? 1 : 'none', overflowY: isFullscreen ? 'auto' : 'visible' }}>
         <Gantt
-          key={`${ganttKey}-${collapsedIds.size}`}
           tasks={ganttTasks}
           viewMode={viewMode}
           onDateChange={handleTaskChange}
@@ -663,56 +517,37 @@ export default function GanttView({
                       }}>
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
                         {(isStage || isParentTask) && (
-                          <button onClick={(e) => { e.stopPropagation(); handleExpanderClick(t); }} style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: isStage ? 'var(--accent)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', transform: t.hideChildren ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s', marginRight: '2px' }}>
+                          <button onClick={(e) => { e.stopPropagation(); onExpanderClick(t); }} style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: isStage ? 'var(--accent)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', transform: t.hideChildren ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s', marginRight: '2px' }}>
                             <ChevronDown size={12} />
                           </button>
                         )}
                         {!isStage && !isMilestone && !isParentTask && isChild && <div style={{ width: '8px', height: '1px', background: 'var(--border)', marginRight: '4px' }} />}
                         
                         {/* Status Dots */}
-                        {!isMilestone && !isStage && (() => {
+                        {!isMilestone && !isNaN(t.id) && (() => {
                           // INEF-04: lookup O(1) con Map pre-calculado
                           const task = taskById.get(t.id);
                           if (!task) return null;
-                          const currentStatus = task.status?.toLowerCase() || 'open';
+                          const currentStatus = task.status?.toLowerCase() || 'pending';
                           const counts = statusSummaries[t.id] || {};
-                          
-                          const getGroupCount = (val: string) => {
-                            if (val === 'Open') return (counts['Open'] || 0) + (counts['Pending'] || 0);
-                            if (val === 'Working') return (counts['Working'] || 0) + (counts['In Progress'] || 0);
-                            if (val === 'Pending Review') return (counts['Pending Review'] || 0) + (counts['Awaiting Approval'] || 0);
-                            if (val === 'Completed') return (counts['Completed'] || 0);
-                            if (val === 'Overdue') return (counts['Overdue'] || 0) + (counts['Blocked'] || 0) + (counts['Cancelled'] || 0);
-                            return 0;
-                          };
-
-                          const isDotActive = (val: string) => {
-                            if (val === 'Open') return currentStatus === 'open' || currentStatus === 'pending';
-                            if (val === 'Working') return currentStatus === 'working' || currentStatus === 'in-progress' || currentStatus === 'in progress';
-                            if (val === 'Pending Review') return currentStatus === 'pending review' || currentStatus === 'awaiting approval' || currentStatus === 'awaiting-approval';
-                            if (val === 'Completed') return currentStatus === 'completed';
-                            if (val === 'Overdue') return currentStatus === 'overdue' || currentStatus === 'blocked' || currentStatus === 'cancelled';
-                            return false;
-                          };
-
                           const statusList = [
-                            { val: 'Open', label: 'P', color: 'var(--border)' },
-                            { val: 'Working', label: 'E', color: '#3b82f6' },
-                            { val: 'Pending Review', label: 'R', color: '#f59e0b' },
+                            { val: 'Pending', label: 'P', color: 'var(--border)' },
+                            { val: 'In Progress', label: 'E', color: '#3b82f6' },
+                            { val: 'Awaiting Approval', label: 'A', color: '#f59e0b' },
                             { val: 'Completed', label: 'C', color: '#22c55e' },
-                            { val: 'Overdue', label: 'V', color: '#ef4444' }
+                            { val: 'Blocked', label: 'B', color: '#ef4444' }
                           ];
                           return (
                             <div style={{ display: 'flex', gap: '3px', marginRight: '6px', opacity: isParentTask ? 0.8 : 1 }}>
                               {statusList.map(s => {
-                                const count = getGroupCount(s.val);
+                                const count = counts[s.val] || 0;
                                 if (isParentTask && count === 0) return null;
                                 return (
                                   <div key={s.val} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                                     <div 
                                       title={`${s.label}${isParentTask ? `: ${count}` : ''}`}
-                                      onClick={async (e) => { if (isParentTask || !onStatusChange) return; e.stopPropagation(); await onStatusChange(task.id, s.val); }}
-                                      style={{ width: '8px', height: '8px', borderRadius: '50%', border: `1.2px solid ${s.color}`, background: isParentTask ? (count > 0 ? s.color : 'transparent') : (isDotActive(s.val) ? s.color : 'transparent'), cursor: isParentTask ? 'default' : 'pointer' }}
+                                      onClick={async (e) => { if (isParentTask || !onStatusChange) return; e.stopPropagation(); const res = await onStatusChange(task.id, s.val); if (res.success) router.refresh(); }}
+                                      style={{ width: '8px', height: '8px', borderRadius: '50%', border: `1.2px solid ${s.color}`, background: isParentTask ? (count > 0 ? s.color : 'transparent') : (currentStatus === s.val.toLowerCase() ? s.color : 'transparent'), cursor: isParentTask ? 'default' : 'pointer' }}
                                     />
                                     {isParentTask && count > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{count}</span>}
                                   </div>
@@ -725,25 +560,11 @@ export default function GanttView({
                         {/* Stage Summary */}
                         {isStage && (() => {
                           const counts = statusSummaries[t.id] || {};
-                          const getGroupCount = (val: string) => {
-                            if (val === 'Open') return (counts['Open'] || 0) + (counts['Pending'] || 0);
-                            if (val === 'Working') return (counts['Working'] || 0) + (counts['In Progress'] || 0);
-                            if (val === 'Pending Review') return (counts['Pending Review'] || 0) + (counts['Awaiting Approval'] || 0);
-                            if (val === 'Completed') return (counts['Completed'] || 0);
-                            if (val === 'Overdue') return (counts['Overdue'] || 0) + (counts['Blocked'] || 0) + (counts['Cancelled'] || 0);
-                            return 0;
-                          };
-                          const statusList = [
-                            { val: 'Open', color: 'var(--border)' },
-                            { val: 'Working', color: '#3b82f6' },
-                            { val: 'Pending Review', color: '#f59e0b' },
-                            { val: 'Completed', color: '#22c55e' },
-                            { val: 'Overdue', color: '#ef4444' }
-                          ];
+                          const statusList = [{ val: 'Pending', color: 'var(--border)' }, { val: 'In Progress', color: '#3b82f6' }, { val: 'Awaiting Approval', color: '#f59e0b' }, { val: 'Completed', color: '#22c55e' }, { val: 'Blocked', color: '#ef4444' }];
                           return (
                             <div style={{ display: 'flex', gap: '8px', marginRight: '10px' }}>
                               {statusList.map(s => {
-                                const count = getGroupCount(s.val);
+                                const count = counts[s.val] || 0;
                                 if (count === 0) return null;
                                 return (
                                   <div key={s.val} style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -771,16 +592,15 @@ export default function GanttView({
                           overflow: 'hidden', 
                           textOverflow: 'ellipsis',
                           flex: 1,
-                          minWidth: 0,
                           maxWidth: isChild ? '100px' : '140px',
                           fontSize: '10px'
                         }}>{t.name}</span>
                         
-                        {!isStage && (() => {
+                        {!isStage && !isMilestone && !isNaN(t.id) && (() => {
                           // INEF-04: lookup O(1) con Map pre-calculado
                           const task = taskById.get(t.id);
                           return (
-                            <div style={{ display: 'flex', gap: '2px', opacity: 0.6, transition: 'opacity 0.2s', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', gap: '2px', opacity: 0.6, transition: 'opacity 0.2s' }}>
                               <button
                                 title="Centrar en gráfica"
                                 onClick={(e) => { e.stopPropagation(); handleCenterTask(t); }}
@@ -789,27 +609,15 @@ export default function GanttView({
                                 <Target size={12} />
                               </button>
                               
-                              <button
-                                title="Agregar sub-tarea"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const deps = task?.dependencies
-                                    ? task.dependencies.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean)
-                                    : [];
-                                  onAddQuickTask?.(
-                                    t.stageName || (t as any).stageName || task?.stageName || '',
-                                    t.id,
-                                    {
-                                      dependencies: deps,
-                                      startDate: task?.planStartDate,
-                                      npdiModule: task?.npdiModule
-                                    }
-                                  );
-                                }}
-                                style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer', color: 'var(--text-muted)' }}
-                              >
-                                <Plus size={10} />
-                              </button>
+                              {!isMilestone && (
+                                <button
+                                  title="Agregar sub-tarea"
+                                  onClick={(e) => { e.stopPropagation(); onAddQuickTask?.(t.stageName || task?.stageName, t.id); }}
+                                  style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer', color: 'var(--text-muted)' }}
+                                >
+                                  <Plus size={10} />
+                                </button>
+                              )}
 
                               {task?.isContextual && (
                                 <button
@@ -834,6 +642,10 @@ export default function GanttView({
           }}
         />
       </div>
+      <style jsx global>{`
+        .gantt-container [class*="taskList"] { background-color: var(--bg-surface) !important; color: var(--text-primary) !important; }
+        .gantt-container svg text { fill: var(--text-primary) !important; }
+      `}</style>
     </div>
   );
 }
