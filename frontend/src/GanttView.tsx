@@ -167,7 +167,11 @@ export default function GanttView({
         const hasChildren = tasks.some(child => child.parentTaskId === t.id);
         
         const rawDeps = t.dependencies || t.dependsOn || [];
-        const dependencyIds = rawDeps.map((d: any) => (d.dependentOnId || d.dependsOnId || d.id)?.toString()).filter(Boolean);
+        const dependencyIds = rawDeps.map((d: any) => {
+          if (typeof d === 'string') return d;
+          if (d.dependsOn && d.dependsOn.id) return d.dependsOn.id.toString();
+          return (d.dependentOnId || d.dependsOnId || d.id)?.toString();
+        }).filter(Boolean);
 
         let barColor = 'var(--accent)';
         const status = t.status?.toLowerCase();

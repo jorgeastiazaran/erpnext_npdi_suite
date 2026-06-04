@@ -964,6 +964,600 @@ def create_project_from_npdi_template(project_data):
 
 
 @frappe.whitelist()
-def get_project_dashboard_data(project):
-    # Placeholder
-    return {"success": True, "data": {}}
+def get_project_dashboard_data():
+    """
+    Returns aggregated dashboard statistics and a list of active NPDI projects.
+    """
+    try:
+        active_projects = frappe.get_all(
+            "Project",
+            filters={"status": "Open", "project_type": "NPDI"},
+            fields=["name", "project_name", "npdi_stage_name", "expected_end_date", "status"]
+        )
+
+        total_active = len(active_projects)
+        delayed_tasks = 0
+        global_progress_sum = 0.0
+
+        projects = []
+        for proj in active_projects:
+            tasks = frappe.get_all(
+                "Task",
+                filters={"project": proj.name},
+                fields=["status", "exp_end_date"]
+            )
+
+            completed = 0
+            total = len(tasks)
+            delayed = 0
+            for t in tasks:
+                if t.status == "Completed":
+                    completed += 1
+                if t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.nowdate() and t.status != "Completed"):
+                    delayed += 1
+
+            progress = round((completed / total * 100), 1) if total > 0 else 0.0
+
+            delayed_tasks += delayed
+            global_progress_sum += progress
+
+            projects.append({
+                "name": proj.name,
+                "title": proj.project_name or proj.name,
+                "stage": proj.npdi_stage_name or "-",
+                "targetLaunchDate": str(proj.expected_end_date or ""),
+                "progress": progress,
+                "status": "Active" if proj.status == "Open" else proj.status
+            })
+
+        global_progress = round(global_progress_sum / total_active, 1) if total_active > 0 else 0.0
+
+        data = {
+            "stats": {
+                "activeProjects": total_active,
+                "delayedTasks": delayed_tasks,
+                "globalProgress": global_progress
+            },
+            "projects": projects
+        }
+
+        return {"success": True, "data": data}
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_project_dashboard_data")
+        return {"success": False, "data": None, "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TASK DETAIL DRAWER API — Phase 1 UI Parity
+# Provides rich task detail, comments, dependency management for the
+# slide-out TaskDetailDrawer component.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@frappe.whitelist()
+def get_task_detail(task_id):
+    """Return comprehensive task data for the slide-out drawer."""
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("read")
+
+        # Status mapping (ERPNext → UI)
+        status_map = {
+            'Open': 'Pending',
+            'Working': 'In Progress',
+            'Pending Review': 'Awaiting Approval',
+            'Completed': 'Completed',
+            'Overdue': 'Blocked',
+            'Cancelled': 'Skipped'
+        }
+
+        # Parse _assign
+        assigned_to = None
+        if task.get("_assign"):
+            try:
+                assign_list = json.loads(task._assign)
+                if assign_list and isinstance(assign_list, list):
+                    first_email = assign_list[0]
+                    full_name = frappe.db.get_value("User", first_email, "full_name") or first_email
+                    assigned_to = {"name": full_name, "email": first_email}
+            except Exception:
+                pass
+
+        # Dependencies (tasks this one depends on)
+        dependencies = []
+        for dep in (task.depends_on or []):
+            try:
+                dep_data = frappe.db.get_value("Task", dep.task,
+                    ["name", "subject", "status", "npdi_stage_name"], as_dict=True)
+                if dep_data:
+                    dependencies.append({
+                        "id": dep_data.name,
+                        "name": dep_data.subject,
+                        "status": status_map.get(dep_data.status, dep_data.status),
+                        "stageName": dep_data.npdi_stage_name or "General"
+                    })
+            except Exception:
+                continue
+
+        # Blocked by (tasks that depend on THIS task - reverse lookup)
+        blocked_by = []
+        blocking_links = frappe.get_all("Task Depends On",
+            filters={"task": task_id},
+            fields=["parent"])
+        for link in blocking_links:
+            try:
+                parent_data = frappe.db.get_value("Task", link.parent,
+                    ["name", "subject", "status", "npdi_stage_name"], as_dict=True)
+                if parent_data:
+                    blocked_by.append({
+                        "id": parent_data.name,
+                        "name": parent_data.subject,
+                        "status": status_map.get(parent_data.status, parent_data.status),
+                        "stageName": parent_data.npdi_stage_name or "General"
+                    })
+            except Exception:
+                continue
+
+        # Comments (using Frappe's native Comment doctype)
+        raw_comments = frappe.get_all("Comment",
+            filters={
+                "reference_doctype": "Task",
+                "reference_name": task_id,
+                "comment_type": "Comment"
+            },
+            fields=["name", "content", "owner", "creation"],
+            order_by="creation asc")
+        comments = []
+        for c in raw_comments:
+            author_name = frappe.db.get_value("User", c.owner, "full_name") or c.owner
+            comments.append({
+                "id": c.name,
+                "content": c.content,
+                "author": {"name": author_name},
+                "createdAt": str(c.creation)
+            })
+
+        # Attachments
+        attachments = frappe.get_all("File",
+            filters={
+                "attached_to_doctype": "Task",
+                "attached_to_name": task_id
+            },
+            fields=["name", "file_url", "file_name"])
+
+        # Compute duration_days from dates if duration field is not set
+        duration_days = int(task.duration or 0)
+        if not duration_days and task.exp_start_date and task.exp_end_date:
+            from frappe.utils import date_diff
+            duration_days = date_diff(task.exp_end_date, task.exp_start_date) + 1
+
+        data = {
+            "id": task.name,
+            "name": task.subject,
+            "status": status_map.get(task.status, task.status),
+            "planStartDate": str(task.exp_start_date) if task.exp_start_date else None,
+            "planEndDate": str(task.exp_end_date) if task.exp_end_date else None,
+            "parentTaskId": task.parent_task,
+            "project": task.project,
+            "isMilestone": bool(task.is_milestone),
+            "isGroup": bool(task.is_group),
+            "durationDays": duration_days,
+            "completedOn": str(task.completed_on) if task.completed_on else None,
+            "description": task.description,
+            "role": {"name": task.get("npdi_responsible_role") or ""},
+            "assignedTo": assigned_to,
+            "stageName": task.get("npdi_stage_name") or "General",
+            "npdiModule": task.get("npdi_module") or "Core",
+            "requiresAttachment": bool(task.get("npdi_requires_attachment")),
+            "isLaunchMilestone": bool(task.get("npdi_launch_milestone")),
+            "isCritical": bool(task.get("npdi_cpm_is_critical")),
+            "slack": float(task.get("npdi_cpm_total_float") or 0),
+            "isFixed": bool(task.get("npdi_cpm_manual_dates")),
+            "manualStartDate": str(task.get("npdi_manual_start")) if task.get("npdi_manual_start") else None,
+            "baselineStartDate": str(task.get("npdi_baseline_start")) if task.get("npdi_baseline_start") else None,
+            "baselineEndDate": str(task.get("npdi_baseline_end")) if task.get("npdi_baseline_end") else None,
+            "dependencies": dependencies,
+            "blockedBy": blocked_by,
+            "comments": comments,
+            "attachments": attachments,
+            "isSkipped": task.status == "Cancelled",
+        }
+        return {"success": True, "data": data}
+
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos para ver esta tarea."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_task_detail")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def add_task_comment(task_id, content):
+    """Add a comment to a task using Frappe's native Comment doctype."""
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("write")
+
+        comment = frappe.get_doc({
+            "doctype": "Comment",
+            "comment_type": "Comment",
+            "reference_doctype": "Task",
+            "reference_name": task_id,
+            "content": content
+        }).insert(ignore_permissions=True)
+
+        author_name = frappe.db.get_value("User", comment.owner, "full_name") or comment.owner
+
+        return {
+            "success": True,
+            "comment": {
+                "id": comment.name,
+                "content": comment.content,
+                "author": {"name": author_name},
+                "createdAt": str(comment.creation)
+            }
+        }
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos para comentar."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "add_task_comment")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def delete_task_comment(comment_id):
+    """Delete a comment by its ID."""
+    try:
+        comment = frappe.get_doc("Comment", comment_id)
+        if comment.reference_doctype == "Task":
+            task = frappe.get_doc("Task", comment.reference_name)
+            task.check_permission("write")
+        frappe.delete_doc("Comment", comment_id, ignore_permissions=True)
+        return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos para eliminar comentarios."}
+    except frappe.DoesNotExistError:
+        return {"success": False, "error": "Comentario no encontrado."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "delete_task_comment")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def remove_task_dependency(task_id, depends_on):
+    """Remove a dependency and trigger CPM recalculation."""
+    from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
+
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("write")
+
+        removed = False
+        for dep in list(task.depends_on or []):
+            if dep.task == depends_on:
+                task.remove(dep)
+                removed = True
+                break
+
+        if not removed:
+            return {"success": False, "error": "Dependencia no encontrada."}
+
+        task.save(ignore_permissions=True)
+
+        if task.project:
+            engine = CPMEngine(task.project)
+            engine.compute()
+
+        return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "remove_task_dependency")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def assign_task_user(task_id, user_email=None):
+    """Assign a user to the task, or clear assignment if no email provided."""
+    from frappe.desk.form.assign_to import add as assign_add, clear as assign_clear
+
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("write")
+
+        if user_email:
+            assign_add({
+                "assign_to": [user_email],
+                "doctype": "Task",
+                "name": task_id
+            })
+        else:
+            assign_clear("Task", task_id)
+
+        return {"success": True}
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "assign_task_user")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def update_task_duration(task_id, duration_days):
+    """Update task duration, recalculate end date, and trigger CPM."""
+    from frappe.utils import add_days
+    from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
+
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("write")
+
+        duration_days = int(duration_days)
+        if duration_days < 1:
+            return {"success": False, "error": "La duración debe ser al menos 1 día."}
+
+        task.duration = duration_days
+        if task.exp_start_date:
+            task.exp_end_date = add_days(task.exp_start_date, duration_days - 1)
+
+        task.save(ignore_permissions=True)
+
+        if task.project:
+            engine = CPMEngine(task.project)
+            engine.compute()
+
+        return {"success": True, "exp_end_date": str(task.exp_end_date) if task.exp_end_date else None}
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "update_task_duration")
+        return {"success": False, "error": str(e)}
+import frappe
+from frappe import _
+from typing import List, Dict, Optional
+import csv
+from io import StringIO
+from collections import defaultdict, deque
+
+@frappe.whitelist()
+def get_template_list():
+    """Return list of all Project Templates with summary info."""
+    try:
+        templates = frappe.get_all(
+            "Project Template",
+            fields=["name", "description", "project_type", "npdi_template_module"]
+        )
+        result = []
+        for t in templates:
+            # Fetch child tables
+            tasks = frappe.get_all(
+                "Project Template Task",
+                filters={"parent": t.name},
+                fields=["name", "task", "duration", "milestone"]
+            )
+            deps = frappe.get_all(
+                "npdi_task_dependencies",
+                filters={"parent": t.name},
+                fields=["task", "depends_on"]
+            )
+            task_count = len(tasks)
+            duration_days = _compute_longest_path(tasks, deps)
+            description = t.description or t.project_type or ""  # fallback to project_type
+            result.append({
+                "name": t.name,
+                "description": description,
+                "module": t.npdi_template_module,
+                "taskCount": task_count,
+                "durationDays": duration_days
+            })
+        return result
+    except Exception as e:
+        frappe.log_error(f"Error in get_template_list: {str(e)}")
+        frappe.throw(_("Failed to fetch template list"))
+
+def _compute_longest_path(tasks: List[Dict], deps: List[Dict]) -> float:
+    """Compute longest path duration using CPM logic.
+    tasks: list of dicts with 'name' (row name) and 'duration'.
+    deps: list of dicts with 'task' and 'depends_on' (both are row names? or actual task links? 
+    Assumes dependencies are between tasks in the same template; we use row names for mapping.
+    For simplicity, we assume 'task' field contains the row name of the dependent task, 
+    and 'depends_on' contains the row name of the predecessor task.
+    In real usage, these might be links to Task doctype. We'll adjust based on actual schema.
+    Here we treat them as row names (i.e., the `name` field in child table) for mapping.
+    """
+    if not tasks:
+        return 0
+
+    # Build graph: task -> list of predecessors (tasks that must finish before this task)
+    # Also duration map
+    dur_map = {t["name"]: t.get("duration", 0) or 0 for t in tasks}
+    predecessors = defaultdict(list)
+    all_task_names = {t["name"] for t in tasks}
+
+    for dep in deps:
+        task_name = dep.get("task")
+        dep_on = dep.get("depends_on")
+        if task_name in all_task_names and dep_on in all_task_names:
+            # task depends on dep_on
+            predecessors[task_name].append(dep_on)
+
+    # Topological sort to get longest path
+    # We'll use DP: longest_path[node] = max over predecessors(longest_path[pre] + dur[node])
+    # First find nodes with no predecessors
+    in_degree = {name: 0 for name in all_task_names}
+    for pred_list in predecessors.values():
+        for p in pred_list:
+            if p in in_degree:
+                in_degree[p] += 1  # This is incorrect; we need in-degree for dependency direction.
+                # Actually we want nodes that are sources: they have no predecessors.
+                # Let's recalc: in_degree should be number of predecessors for each node.
+    # Simpler: compute DP via DFS or use Kahn's algorithm.
+    # We'll do DFS with memoization.
+    longest = {}
+    def dfs(node):
+        if node in longest:
+            return longest[node]
+        if node not in dur_map:
+            # should not happen
+            longest[node] = 0
+            return 0
+        max_pred = 0
+        for pred in predecessors.get(node, []):
+            max_pred = max(max_pred, dfs(pred))
+        longest[node] = max_pred + dur_map[node]
+        return longest[node]
+
+    max_dur = 0
+    for name in all_task_names:
+        max_dur = max(max_dur, dfs(name))
+    return max_dur
+
+@frappe.whitelist()
+def duplicate_template(template_name: str):
+    """Deep duplicate a Project Template with new Task stubs."""
+    try:
+        source = frappe.get_doc("Project Template", template_name)
+        new_name = f"Copy of {template_name}"
+        # Ensure unique name (simple increment)
+        counter = 1
+        while frappe.db.exists("Project Template", new_name):
+            new_name = f"Copy of {template_name} ({counter})"
+            counter += 1
+
+        # Create new Project Template doc
+        new_template = frappe.new_doc("Project Template")
+        new_template.update({
+            "name": new_name,
+            "description": source.description,
+            "project_type": source.project_type,
+            "npdi_template_module": source.npdi_template_module,
+            # other fields...
+        })
+
+        # We'll handle child tables manually after insertion to avoid automatic linking
+        # First insert the template (without children)
+        new_template.flags.ignore_mandatory = True  # in case children are required
+        new_template.insert(ignore_permissions=True)
+
+        # Now duplicate tasks and create new Task stubs
+        old_to_new_task_map = {}  # mapping old Task name -> new Task name
+        old_child_row_to_new_child_row = {}  # mapping old child row name -> new child row name (for dependencies)
+        new_tasks_child = []
+        new_deps_child = []
+
+        # First pass: create new Task docs and child rows for tasks
+        for child in source.get("tasks"):
+            old_task_name = child.task
+            # Get the original Task stub (must be template)
+            if not old_task_name:
+                continue
+            old_task = frappe.get_doc("Task", old_task_name)
+            # Create new Task doc with same fields but new name
+            new_task = frappe.copy_doc(old_task)
+            new_task.name = None
+            new_task.is_template = 1  # ensure it's a template
+            new_task.title = f"Copy of {old_task.title}" if old_task.title else None
+            new_task.insert(ignore_permissions=True)
+            new_task_name = new_task.name
+            old_to_new_task_map[old_task_name] = new_task_name
+
+            # Create new child row for Project Template Task
+            new_child = frappe.new_doc("Project Template Task")
+            new_child.parent = new_template.name
+            new_child.parentfield = "tasks"
+            new_child.parenttype = "Project Template"
+            new_child.task = new_task_name
+            new_child.duration = child.duration
+            new_child.stage = child.stage
+            new_child.module = child.module
+            new_child.role = child.role
+            new_child.milestone = child.milestone
+            new_child.parent_task = child.parent_task  # will be updated later
+            new_child.insert(ignore_permissions=True)
+            old_child_row_to_new_child_row[child.name] = new_child.name
+            new_tasks_child.append(new_child)
+
+        # Update parent_task references in the new child rows
+        for new_child, old_child in zip(new_tasks_child, source.get("tasks")):
+            old_parent_task = old_child.parent_task
+            if old_parent_task:
+                if old_parent_task in old_to_new_task_map:
+                    new_parent_task = old_to_new_task_map[old_parent_task]
+                    # Update the child row
+                    frappe.db.set_value("Project Template Task", new_child.name, "parent_task", new_parent_task)
+                else:
+                    # If the parent task was not in this template (maybe shared), we keep old reference?
+                    # Better to unset or raise? For safety, we keep but log.
+                    frappe.log_error(f"Parent task {old_parent_task} not mapped, check duplicates")
+            else:
+                # no parent
+                pass
+
+        # Handle npdi_task_dependencies child table
+        for dep in source.get("npdi_task_dependencies"):
+            old_task = dep.task
+            old_depends_on = dep.depends_on
+            new_task = old_to_new_task_map.get(old_task)
+            new_depends_on = old_to_new_task_map.get(old_depends_on)
+            if not new_task or not new_depends_on:
+                # Could not map, skip or throw? skip with warning
+                frappe.log_error(f"Could not map dependency for template {template_name}, task {old_task} or depends_on {old_depends_on}")
+                continue
+            # Create new dependency child row
+            new_dep = frappe.new_doc("npdi_task_dependencies")
+            new_dep.parent = new_template.name
+            new_dep.parentfield = "npdi_task_dependencies"
+            new_dep.parenttype = "Project Template"
+            new_dep.task = new_task
+            new_dep.depends_on = new_depends_on
+            new_dep.insert(ignore_permissions=True)
+            new_deps_child.append(new_dep)
+
+        # Optionally flush changes
+        frappe.db.commit()
+
+        return {"success": True, "new_template_name": new_name}
+    except Exception as e:
+        frappe.log_error(f"Error duplicating template {template_name}: {str(e)}")
+        frappe.throw(_("Failed to duplicate template"))
+
+@frappe.whitelist()
+def export_template_csv(template_name: str):
+    """Export template tasks as CSV string."""
+    try:
+        template = frappe.get_doc("Project Template", template_name)
+        tasks = template.get("tasks")
+        deps = template.get("npdi_task_dependencies")
+        # Build dependency mapping: for each task (by row name), list of depends on (row names)
+        dep_map = defaultdict(list)
+        for d in deps:
+            # Use the actual task name (field 'task' is link to Task, not row name)
+            # We need to map between row name and task name. For dependencies, we assume 
+            # the 'task' field refers to the same child row? Or link to Task? Typically dependency 
+            # links are between tasks, so we use task names.
+            # We'll use the 'task' field (link to Task) to identify tasks.
+            # For output, we need to combine dependencies as comma-separated task names.
+            # This depends on schema; we'll assume 'task' field is Task name, 'depends_on' is also Task name.
+            dep_map[d.task].append(d.depends_on)
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Task Name", "Stage", "Module", "Role", "Duration", "Milestone", "Dependencies"])
+        for t in tasks:
+            task_deps = ", ".join(dep_map.get(t.task, []))
+            writer.writerow([
+                t.task, 
+                t.stage, 
+                t.module, 
+                t.role, 
+                t.duration, 
+                "Yes" if t.milestone else "No", 
+                task_deps
+            ])
+        csv_string = output.getvalue()
+        output.close()
+        return {"success": True, "csv": csv_string}
+    except Exception as e:
+        frappe.log_error(f"Error exporting template {template_name}: {str(e)}")
+        frappe.throw(_("Failed to export template as CSV"))
+

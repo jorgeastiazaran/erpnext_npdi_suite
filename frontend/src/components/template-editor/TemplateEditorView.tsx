@@ -406,7 +406,7 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
                         <TaskTemplateRow key={task.id} task={task} allFlatTasks={allFlatTasks} allRoles={allRoles}
                           existingStageNames={existingStageNames} templateId={template.id} scheduleMap={scheduleMap}
                           onDelete={handleDeleteTask} onAddChild={openDialogForChild} depth={0}
-                          onDragStart={handleDragStart} onDragEnter={handleDragEnter} />
+                          onDragStart={handleDragStart} onDragEnter={handleDragEnter} onRefresh={onRefresh} />
                       ))}
                     </div>
                   )}

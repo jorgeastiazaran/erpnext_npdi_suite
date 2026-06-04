@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import TemplateEditorView from './components/template-editor/TemplateEditorView'
+import TemplateListPage from './components/TemplateListPage'
+import ProjectsDashboard from './components/ProjectsDashboard'
 import GanttView from './GanttView'
 import ListView from './ListView'
+import TaskDetailDrawer from './components/TaskDetailDrawer'
 import { Calendar, List, ChevronRight } from 'lucide-react'
 import './App.css'
 import { toISODateString } from './dateUtils'
@@ -15,6 +18,8 @@ function App() {
   const [isTemplateMode, setIsTemplateMode] = useState(false);
   const [templateData, setTemplateData] = useState<any>(null);
   const [activeView, setActiveView] = useState<'gantt' | 'list'>('gantt');
+  const [appMode, setAppMode] = useState<'project' | 'template_editor' | 'template_list' | 'project_dashboard' | 'error'>('error');
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const fetchTasks = () => {
     let projectName: string | null = null;
@@ -31,13 +36,27 @@ function App() {
     }
 
     if (!projectName && !templateName) {
-      setError("No se ha proporcionado un Proyecto o Plantilla válido. Usa el botón 'Open NPDI Dashboard' desde el registro del proyecto.");
-      setLoading(false);
-      return;
+      // Check if we are specifically on a template list route
+      // @ts-ignore
+      const route = window.frappe?.get_route?.();
+      if (route && route[1] === "Project Template" && !route[2]) {
+        setAppMode('template_list');
+        setLoading(false);
+        return;
+      } else if (route && route[1] === "Project" && !route[2]) {
+        setAppMode('project_dashboard');
+        setLoading(false);
+        return;
+      } else {
+        // Just default to project dashboard for now if nothing else is provided
+        setAppMode('project_dashboard');
+        setLoading(false);
+        return;
+      }
     }
 
     if (templateName) {
-      setIsTemplateMode(true);
+      setAppMode('template_editor');
       // @ts-ignore
       if (window.frappe) {
         // @ts-ignore
@@ -68,6 +87,7 @@ function App() {
         args: { project: projectName, template: templateName },
         callback: function (r: any) {
           if (r.message && r.message.success) {
+            setAppMode('project');
             setTasks(r.message.tasks);
             setProjectMeta(r.message.project_meta || null);
           } else {
@@ -110,9 +130,7 @@ function App() {
   if (error) return <div style={{ padding: '40px', textAlign: 'center', color: 'red' }}>{error}</div>;
 
   const handleTaskClick = (taskId: string) => {
-    // Open the standard Frappe Task form in a new tab
-    const origin = window.location.origin;
-    window.open(`${origin}/app/task/${taskId}`, '_blank');
+    setSelectedTaskId(taskId);
   };
 
   const handleStatusChange = async (taskId: string, status: string) => {
@@ -354,7 +372,28 @@ function App() {
   };
 
   
-  if (isTemplateMode && templateData) {
+  if (appMode === 'template_list') {
+    return (
+      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+        <TemplateListPage onEditTemplate={(name) => {
+          // Temporarily navigate to the template
+          window.location.href = `/app/project-template/${name}`;
+        }} />
+      </div>
+    );
+  }
+
+  if (appMode === 'project_dashboard') {
+    return (
+      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+        <ProjectsDashboard onOpenProject={(name) => {
+          window.location.href = `/app/project/${name}`;
+        }} />
+      </div>
+    );
+  }
+
+  if (appMode === 'template_editor' && templateData) {
     const roles = ["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => ({name: r, id: r}));
     return (
       <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
@@ -484,6 +523,14 @@ function App() {
           onAddTaskDependency={handleAddTaskDependency}
           onSkipTask={handleSkipTask}
           onUpdateTask={handleUpdateTask}
+        />
+      )}
+
+      {selectedTaskId && (
+        <TaskDetailDrawer
+          taskId={selectedTaskId}
+          onClose={() => setSelectedTaskId(null)}
+          onRefresh={fetchTasks}
         />
       )}
     </div>
