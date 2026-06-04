@@ -366,7 +366,7 @@ export default function ListView({
                       })()}
                     </span>
                     <span style={{ marginLeft: '8px', color: 'var(--accent)', fontWeight: 600 }}>
-                      ({task.durationDays} días)
+                      ({task.durationDays || (Math.round((new Date(task.planEndDate).getTime() - new Date(task.planStartDate).getTime()) / (1000 * 60 * 60 * 24)) + 1)} días)
                     </span>
                   </span>
                 )}

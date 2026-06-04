@@ -242,6 +242,7 @@ def update_project_task(task_id, task_data):
                 task.expected_time = duration_days * 24  # Assuming hours for legacy, but dates are what matter
                 task.exp_end_date = add_days(task.exp_start_date, duration_days - 1)
         
+        task.flags.ignore_validate = True
         task.save(ignore_permissions=True)
         
         # Trigger CPM recalculation if project exists
@@ -1125,11 +1126,11 @@ def get_task_detail(task_id):
             },
             fields=["name", "file_url", "file_name"])
 
-        # Compute duration_days from dates if duration field is not set
-        duration_days = int(task.duration or 0)
-        if not duration_days and task.exp_start_date and task.exp_end_date:
+        if task.exp_start_date and task.exp_end_date:
             from frappe.utils import date_diff
             duration_days = date_diff(task.exp_end_date, task.exp_start_date) + 1
+        else:
+            duration_days = int(task.duration or 0)
 
         data = {
             "id": task.name,
@@ -1300,6 +1301,7 @@ def update_task_duration(task_id, duration_days):
         if task.exp_start_date:
             task.exp_end_date = add_days(task.exp_start_date, duration_days - 1)
 
+        task.flags.ignore_validate = True
         task.save(ignore_permissions=True)
 
         if task.project:

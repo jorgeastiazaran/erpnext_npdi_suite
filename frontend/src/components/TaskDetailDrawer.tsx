@@ -206,8 +206,7 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
     });
   };
 
-  // Update duration on blur
-  const handleDurationBlur = () => {
+  const handleSave = () => {
     if (!taskId || durationEdit === null || durationEdit === taskDetail?.durationDays) return;
     // @ts-ignore
     window.frappe.call({
@@ -217,6 +216,7 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
         if (r.message && r.message.success) {
           setTaskDetail((prev) => (prev ? { ...prev, durationDays: durationEdit } : null));
           onRefresh();
+          onClose(); // Close drawer after explicit save
         } else {
           setError('Error al actualizar duración');
           setDurationEdit(taskDetail?.durationDays ?? null);
@@ -356,8 +356,8 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
                 className="info-input"
                 value={durationEdit ?? ''}
                 onChange={(e) => setDurationEdit(Number(e.target.value))}
-                onBlur={handleDurationBlur}
                 min={0}
+                disabled={taskDetail.status === 'Completed'}
               />
             </div>
           </div>
@@ -479,8 +479,8 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
           </div>
         </div>
 
-        {/* Bottom link */}
-        <div className="drawer-footer">
+        {/* Bottom link & Actions */}
+        <div className="drawer-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <a
             href={`/app/task/${taskId}`}
             target="_blank"
@@ -492,8 +492,17 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
             }}
           >
             <ExternalLink size={16} />
-            Abrir en Formulario Frappe
+            Abrir en Frappe
           </a>
+          
+          <button 
+            className="btn btn-primary" 
+            onClick={handleSave}
+            disabled={durationEdit === taskDetail.durationDays || taskDetail.status === 'Completed'}
+            style={{ padding: '6px 16px', fontSize: '12px' }}
+          >
+            Guardar Cambios
+          </button>
         </div>
       </div>
     </>
