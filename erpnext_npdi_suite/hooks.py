@@ -42,3 +42,7 @@ doctype_js = {
     "Project Template": "public/js/project_template.js",
     "Task": "public/js/task.js"
 }
+
+doctype_list_js = {
+    "Project": "public/js/project_list.js"
+}

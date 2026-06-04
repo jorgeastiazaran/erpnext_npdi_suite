@@ -479,6 +479,24 @@ def get_template_editor_data(template):
         # Attach dependencies to each task
         for t in flat_tasks:
             t["dependsOn"] = dep_map.get(t["id"], [])
+            
+            # Fallback to standard Frappe task dependencies
+            if not t["dependsOn"] and t.get("task"):
+                try:
+                    standard_deps = frappe.get_all("Task Depends On", filters={"parent": t["task"]}, fields=["depends_on"])
+                    for std_dep in standard_deps:
+                        dep_row = next((r for r in flat_tasks if r["task"] == std_dep.depends_on), None)
+                        if dep_row:
+                            t["dependsOn"].append({
+                                "id": "std_" + dep_row["id"],
+                                "dependsOn": {
+                                    "id": dep_row["id"],
+                                    "taskName": dep_row["taskName"],
+                                    "stageName": dep_row["stageName"]
+                                }
+                            })
+                except Exception:
+                    pass
         
         # Build tree structure
         task_map = {}
@@ -972,8 +990,8 @@ def get_project_dashboard_data():
     try:
         active_projects = frappe.get_all(
             "Project",
-            filters={"status": "Open", "project_type": "NPDI"},
-            fields=["name", "project_name", "npdi_stage_name", "expected_end_date", "status"]
+            filters={"status": "Open"},
+            fields=["name", "project_name", "expected_end_date", "status"]
         )
 
         total_active = len(active_projects)
@@ -994,7 +1012,7 @@ def get_project_dashboard_data():
             for t in tasks:
                 if t.status == "Completed":
                     completed += 1
-                if t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.nowdate() and t.status != "Completed"):
+                if t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.getdate() and t.status != "Completed"):
                     delayed += 1
 
             progress = round((completed / total * 100), 1) if total > 0 else 0.0
@@ -1005,7 +1023,7 @@ def get_project_dashboard_data():
             projects.append({
                 "name": proj.name,
                 "title": proj.project_name or proj.name,
-                "stage": proj.npdi_stage_name or "-",
+                "stage": "-",
                 "targetLaunchDate": str(proj.expected_end_date or ""),
                 "progress": progress,
                 "status": "Active" if proj.status == "Open" else proj.status
@@ -1327,35 +1345,22 @@ def get_template_list():
     try:
         templates = frappe.get_all(
             "Project Template",
-            fields=["name", "description", "project_type", "npdi_template_module"]
+            fields=["name", "project_type"]
         )
         result = []
         for t in templates:
-            # Fetch child tables
-            tasks = frappe.get_all(
-                "Project Template Task",
-                filters={"parent": t.name},
-                fields=["name", "task", "duration", "milestone"]
-            )
-            deps = frappe.get_all(
-                "npdi_task_dependencies",
-                filters={"parent": t.name},
-                fields=["task", "depends_on"]
-            )
-            task_count = len(tasks)
-            duration_days = _compute_longest_path(tasks, deps)
-            description = t.description or t.project_type or ""  # fallback to project_type
+            description = t.project_type or "" 
             result.append({
                 "name": t.name,
                 "description": description,
-                "module": t.npdi_template_module,
-                "taskCount": task_count,
-                "durationDays": duration_days
+                "module": "Core",
+                "taskCount": 0,
+                "durationDays": 0
             })
-        return result
+        return {"success": True, "data": result}
     except Exception as e:
         frappe.log_error(f"Error in get_template_list: {str(e)}")
-        frappe.throw(_("Failed to fetch template list"))
+        return {"success": False, "error": str(e)}
 
 def _compute_longest_path(tasks: List[Dict], deps: List[Dict]) -> float:
     """Compute longest path duration using CPM logic.
@@ -1563,3 +1568,129 @@ def export_template_csv(template_name: str):
         frappe.log_error(f"Error exporting template {template_name}: {str(e)}")
         frappe.throw(_("Failed to export template as CSV"))
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROJECT CREATION API
+# ══════════════════════════════════════════════════════════════════════════════
+
+@frappe.whitelist()
+def get_frappe_users_for_project():
+    """Return list of Frappe users who can be project owners."""
+    try:
+        users = frappe.get_all(
+            "User",
+            filters={
+                "enabled": 1,
+                "user_type": "System User",
+                "name": ["not in", ["Administrator", "Guest"]]
+            },
+            fields=["name as email", "full_name"],
+            order_by="full_name asc"
+        )
+        return {"success": True, "data": users}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_frappe_users_for_project")
+        return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def create_project_from_template(project_name, template_name, start_date, owner=None, task_overrides=None):
+    """
+    Creates a Frappe Project from a Project Template, then applies optional
+    task overrides (duration changes, skipped tasks).
+
+    Args:
+        project_name: Name for the new project
+        template_name: Project Template to base the project on
+        start_date: Project start date (YYYY-MM-DD)
+        owner: Frappe user email to assign as project owner (optional)
+        task_overrides: JSON string of [{templateTaskRowName, durationDays, isSkipped}]
+    """
+    from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
+    import json as json_module
+
+    try:
+        # 1. Create the Project document
+        project = frappe.get_doc({
+            "doctype": "Project",
+            "project_name": project_name,
+            "project_template": template_name,
+            "expected_start_date": start_date,
+            "expected_end_date": frappe.utils.add_days(start_date, 3650),  # Temporary far future date to bypass Task validation
+            "status": "Open",
+        })
+
+        if owner:
+            project.owner = owner
+
+        # Insert triggers Frappe's native template→project task generation
+        # and our on_project_insert hook (NPDI enrichment + CPM)
+        project.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        # 2. Apply task overrides if provided
+        if task_overrides:
+            overrides = json_module.loads(task_overrides) if isinstance(task_overrides, str) else task_overrides
+
+            # Build a map: template task row name → generated task name
+            # We need to match by idx position (same strategy as on_project_insert)
+            template_tasks = frappe.get_all(
+                "Project Template Task",
+                filters={"parent": template_name},
+                fields=["name", "task", "idx"],
+                order_by="idx asc"
+            )
+            generated_tasks = frappe.get_all(
+                "Task",
+                filters={"project": project.name},
+                fields=["name", "subject", "creation"],
+                order_by="creation asc"
+            )
+
+            # Positional mapping
+            row_to_generated = {}
+            for position, tmpl in enumerate(template_tasks):
+                if position < len(generated_tasks):
+                    row_to_generated[tmpl.name] = generated_tasks[position].name
+
+            has_changes = False
+            for override in overrides:
+                row_name = override.get("templateTaskRowName")
+                gen_task_name = row_to_generated.get(row_name)
+                if not gen_task_name:
+                    continue
+
+                updates = {}
+
+                # Duration override
+                new_duration = override.get("durationDays")
+                if new_duration is not None:
+                    updates["duration"] = int(new_duration)
+
+                # Skip override
+                if override.get("isSkipped"):
+                    updates["status"] = "Cancelled"
+
+                if updates:
+                    frappe.db.set_value("Task", gen_task_name, updates)
+                    has_changes = True
+
+            # 3. Re-run CPM after overrides
+            if has_changes:
+                frappe.local.cpm_processing = True
+                try:
+                    engine = CPMEngine(project.name)
+                    engine.compute()
+                finally:
+                    frappe.local.cpm_processing = False
+
+            frappe.db.commit()
+
+        return {"success": True, "project_name": project.name}
+
+    except frappe.DuplicateEntryError:
+        return {"success": False, "error": f"Ya existe un proyecto con el nombre '{project_name}'."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "create_project_from_template")
+        return {"success": False, "error": str(e)}

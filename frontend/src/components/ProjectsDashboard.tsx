@@ -22,9 +22,10 @@ interface DashboardData {
 
 interface Props {
   onOpenProject: (projectName: string) => void;
+  onCreateProject?: () => void;
 }
 
-const ProjectsDashboard: React.FC<Props> = ({ onOpenProject }) => {
+const ProjectsDashboard: React.FC<Props> = ({ onOpenProject, onCreateProject }) => {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +86,7 @@ const ProjectsDashboard: React.FC<Props> = ({ onOpenProject }) => {
         </div>
         <button 
           className="btn-new-project"
-          onClick={() => window.open('/app/project/new', '_blank')}
+          onClick={() => onCreateProject ? onCreateProject() : window.open('/app/project/new', '_blank')}
         >
           + Nuevo Proyecto
         </button>

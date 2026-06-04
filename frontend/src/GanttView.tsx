@@ -16,11 +16,13 @@ interface GanttViewProps {
   selectedTaskId?: string | null;
   onAddQuickTask?: (stageName: string, parentTaskId: number | null) => void;
   onDeleteQuickTask?: (taskId: string) => void;
+  projectMeta?: any;
+  onCaptureBaseline?: () => void;
 }
 
 export default function GanttView({ 
   tasks, onTaskClick, onDateChange, onStatusChange, selectedTaskId,
-  onAddQuickTask, onDeleteQuickTask 
+  onAddQuickTask, onDeleteQuickTask, projectMeta, onCaptureBaseline
 }: GanttViewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Week);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -203,7 +205,7 @@ export default function GanttView({
           styles: {
             progressColor: barColor,
             progressSelectedColor: barColor,
-            backgroundColor: status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
+            backgroundColor: status === 'Blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
           },
           displayOrder: currentDisplayOrder++,
           isDisabled: t.isSkipped,
@@ -437,6 +439,16 @@ export default function GanttView({
             </div>
             
             <div style={{ display: 'flex', gap: '4px' }}>
+              {projectMeta && !projectMeta.npdi_baseline_locked && onCaptureBaseline && (
+                <button 
+                  className="btn btn-secondary"
+                  style={{ fontSize: '11px', padding: '4px 8px' }}
+                  onClick={onCaptureBaseline}
+                >
+                  <Target size={12} style={{ marginRight: '4px' }}/>
+                  Capturar Línea Base
+                </button>
+              )}
               <button 
                 className={`btn ${showBaseline ? 'btn-primary' : 'btn-ghost'}`}
                 style={{ fontSize: '11px', padding: '4px 8px' }}

@@ -5,6 +5,7 @@ import ProjectsDashboard from './components/ProjectsDashboard'
 import GanttView from './GanttView'
 import ListView from './ListView'
 import TaskDetailDrawer from './components/TaskDetailDrawer'
+import ProjectCreationModal from './components/ProjectCreationModal'
 import { Calendar, List, ChevronRight } from 'lucide-react'
 import './App.css'
 import { toISODateString } from './dateUtils'
@@ -20,6 +21,7 @@ function App() {
   const [activeView, setActiveView] = useState<'gantt' | 'list'>('gantt');
   const [appMode, setAppMode] = useState<'project' | 'template_editor' | 'template_list' | 'project_dashboard' | 'error'>('error');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [showCreationModal, setShowCreationModal] = useState(false);
 
   const fetchTasks = () => {
     let projectName: string | null = null;
@@ -386,9 +388,20 @@ function App() {
   if (appMode === 'project_dashboard') {
     return (
       <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
-        <ProjectsDashboard onOpenProject={(name) => {
-          window.location.href = `/app/project/${name}`;
-        }} />
+        <ProjectsDashboard
+          onOpenProject={(name) => {
+            window.location.href = `/app/project/${name}`;
+          }}
+          onCreateProject={() => setShowCreationModal(true)}
+        />
+        <ProjectCreationModal
+          isOpen={showCreationModal}
+          onClose={() => setShowCreationModal(false)}
+          onProjectCreated={(projectName) => {
+            setShowCreationModal(false);
+            window.location.href = `/app/project/${projectName}`;
+          }}
+        />
       </div>
     );
   }
