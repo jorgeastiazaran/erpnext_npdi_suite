@@ -242,7 +242,7 @@ export default function GanttView({
   }, [tasks, collapsedIds, showBaseline]);
 
   const handleTaskChange = async (task: Task) => {
-    if (!isNaN(parseInt(task.id))) {
+    if (!task.id.toString().startsWith('stage-')) {
       const originalTask = tasks.find(t => t.id.toString() === task.id);
       
       if (originalTask) {
@@ -540,7 +540,7 @@ export default function GanttView({
                         {!isStage && !isMilestone && !isParentTask && isChild && <div style={{ width: '8px', height: '1px', background: 'var(--border)', marginRight: '4px' }} />}
                         
                         {/* Status Dots */}
-                        {!isMilestone && !isNaN(t.id) && (() => {
+                        {!isMilestone && !isStage && (() => {
                           // INEF-04: lookup O(1) con Map pre-calculado
                           const task = taskById.get(t.id);
                           if (!task) return null;
@@ -612,7 +612,7 @@ export default function GanttView({
                           fontSize: '10px'
                         }}>{t.name}</span>
                         
-                        {!isStage && !isMilestone && !isNaN(t.id) && (() => {
+                        {!isStage && !isMilestone && (() => {
                           // INEF-04: lookup O(1) con Map pre-calculado
                           const task = taskById.get(t.id);
                           return (

@@ -52,6 +52,9 @@ export default function ProjectCreationModal({
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
+  // ── Role Assignments ──
+  const [roleAssignments, setRoleAssignments] = useState<Record<string, string>>({});
+
   // Step 2 state
   const [taskConfigs, setTaskConfigs] = useState<Record<string, { isSkipped: boolean; durationDays: number }>>({});
   const [schedulerResult, setSchedulerResult] = useState<PreviewSchedulerResult | null>(null);
@@ -123,6 +126,15 @@ export default function ProjectCreationModal({
     extract(templateDetail.tasks);
     return flat;
   }, [templateDetail]);
+
+  const uniqueRoles = useMemo(() => {
+    if (!flatTasks) return [];
+    const roles = new Set<string>();
+    flatTasks.forEach((t: any) => {
+      if (t.roleId) roles.add(t.roleId);
+    });
+    return Array.from(roles).sort();
+  }, [flatTasks]);
 
   // ── Run scheduler ───────────────────────────────────────────────────────
   const calculateSchedule = useCallback(
@@ -288,35 +300,46 @@ export default function ProjectCreationModal({
     });
 
     // @ts-ignore
-    if (window.frappe) {
-      // @ts-ignore
-      frappe.call({
-        method: 'erpnext_npdi_suite.api.create_project_from_template',
-        args: {
-          project_name: projectName.trim(),
-          template_name: selectedTemplate,
-          start_date: startDate,
-          owner: selectedOwner || undefined,
-          task_overrides: JSON.stringify(overrides),
-        },
-        callback: (r: any) => {
-          setIsSubmitting(false);
-          if (r.message && r.message.success) {
-            // @ts-ignore
-            frappe.show_alert &&
-              // @ts-ignore
-              frappe.show_alert({
-                message: `Proyecto "${r.message.project_name}" creado exitosamente.`,
-                indicator: 'green',
-              });
-            onProjectCreated(r.message.project_name);
-            handleClose();
-          } else {
-            alert(r.message?.error || 'Error al crear el proyecto.');
-          }
-        },
-      });
-    }
+    if (!window.frappe) return;
+
+    // @ts-ignore
+    frappe.call({
+      method: 'erpnext_npdi_suite.api.create_project_from_template',
+      args: {
+        project_name: projectName.trim(),
+        template_name: selectedTemplate,
+        start_date: startDate,
+        owner: selectedOwner || null,
+        task_overrides: JSON.stringify(overrides),
+        role_assignments: JSON.stringify(roleAssignments),
+      },
+      freeze: true,
+      freeze_message: 'Creando proyecto...',
+      callback: (r: any) => {
+        if (r.message && r.message.success) {
+          // @ts-ignore
+          frappe.show_alert && frappe.show_alert({
+            message: `Proyecto "${r.message.project_name}" creado exitosamente.`,
+            indicator: 'green',
+          });
+          onProjectCreated(r.message.project_name);
+          handleClose();
+        } else {
+          // @ts-ignore
+          frappe.msgprint({
+            title: 'Error al crear proyecto',
+            message: r.message?.error || 'Error desconocido.',
+            indicator: 'red',
+          });
+        }
+      },
+      error: (err: any) => {
+        console.error('create_project_from_template error:', err);
+      },
+      always: () => {
+        setIsSubmitting(false);
+      }
+    });
   };
 
   const handleClose = () => {
@@ -397,15 +420,13 @@ export default function ProjectCreationModal({
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {step === 2 && (
               <button
                 className="btn btn-ghost"
                 onClick={() => setStep(1)}
-                style={{ fontSize: '12px', padding: '4px 12px' }}
+                style={{ fontSize: '12px', padding: '4px 12px', display: step === 2 ? 'inline-flex' : 'none' }}
               >
                 ← Volver
               </button>
-            )}
             <button
               onClick={handleClose}
               style={{
@@ -422,8 +443,7 @@ export default function ProjectCreationModal({
         </div>
 
         {/* ── Step 1: Configuration Form ────────────────────────────────── */}
-        {step === 1 && (
-          <div style={{ padding: '24px', flex: 1, overflowY: 'auto' }}>
+          <div style={{ padding: '24px', flex: 1, overflowY: 'auto', display: step === 1 ? 'block' : 'none' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
               {/* Project Name */}
               <div>
@@ -546,20 +566,21 @@ export default function ProjectCreationModal({
               </div>
             )}
           </div>
-        )}
 
         {/* ── Step 2: Task Preview ─────────────────────────────────────── */}
-        {step === 2 && (
           <div
             style={{
               flex: 1,
               overflowY: 'auto',
               padding: '0',
               backgroundColor: 'var(--bg-surface-2, #f8f9fa)',
+              display: step === 2 ? 'block' : 'none',
+              minHeight: 0,
             }}
           >
             {schedulerResult ? (
-              <div style={{ margin: '16px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}>
+              <React.Fragment>
+                <div style={{ margin: '16px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                   <thead>
                     <tr style={{ borderBottom: '2px solid var(--border)', backgroundColor: 'var(--bg-surface-2, #f8f9fa)' }}>
@@ -620,13 +641,41 @@ export default function ProjectCreationModal({
                   </tbody>
                 </table>
               </div>
-            ) : (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                <Loader2 className="animate-spin" size={32} style={{ color: 'var(--text-muted)' }} />
+
+              {/* Role Assignments Section */}
+              {uniqueRoles.length > 0 && (
+              <div style={{ margin: '16px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-surface-2, #f8f9fa)' }}>
+                  <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    Asignación de Responsables (Roles)
+                  </h4>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Asigna un usuario a cada rol para que sean los dueños de las tareas generadas.
+                  </p>
+                </div>
+                <div style={{ padding: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
+                  {uniqueRoles.map((role) => (
+                    <div key={role} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {role}
+                      </label>
+                      <UserAutocomplete
+                        users={users}
+                        value={roleAssignments[role] || ''}
+                        onChange={(email) => setRoleAssignments((prev) => ({ ...prev, [role]: email }))}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+            </React.Fragment>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+              <Loader2 className="animate-spin" size={32} style={{ color: 'var(--text-muted)' }} />
+            </div>
+          )}
           </div>
-        )}
 
         {/* ── Footer ───────────────────────────────────────────────────── */}
         <div
@@ -639,20 +688,17 @@ export default function ProjectCreationModal({
             backgroundColor: 'var(--bg-surface)',
           }}
         >
-          {step === 2 && schedulerResult ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: step === 2 && schedulerResult ? 'flex' : 'none', alignItems: 'center', gap: '10px' }}>
               <Calendar size={18} style={{ color: 'var(--text-muted)' }} />
               <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Fecha estimada de finalización:</span>
               <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {schedulerResult.estimatedEndDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
+                {schedulerResult?.estimatedEndDate?.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' }) ?? ''}
               </span>
               <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '4px' }}>
-                ({schedulerResult.totalDurationDays} días)
+                {schedulerResult ? `(${schedulerResult.totalDurationDays} días)` : ''}
               </span>
             </div>
-          ) : (
-            <div />
-          )}
+            <div style={{ display: step === 2 && schedulerResult ? 'none' : 'block' }} />
 
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
@@ -664,28 +710,25 @@ export default function ProjectCreationModal({
               Cancelar
             </button>
 
-            {step === 1 ? (
               <button
                 className="btn btn-primary"
                 onClick={handlePreview}
                 disabled={!projectName.trim() || !startDate || !selectedTemplate || !templateDetail || loadingDetail}
-                style={{ padding: '8px 24px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ padding: '8px 24px', fontSize: '13px', display: step === 1 ? 'flex' : 'none', alignItems: 'center', gap: '6px' }}
               >
                 <Eye size={16} />
                 Previsualizar
                 <ChevronRight size={14} />
               </button>
-            ) : (
               <button
                 className="btn btn-primary"
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                style={{ padding: '8px 24px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ padding: '8px 24px', fontSize: '13px', display: step === 2 ? 'flex' : 'none', alignItems: 'center', gap: '6px' }}
               >
                 {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                 Confirmar y Crear
               </button>
-            )}
           </div>
         </div>
       </div>

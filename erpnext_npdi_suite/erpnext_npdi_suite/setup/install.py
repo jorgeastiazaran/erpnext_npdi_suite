@@ -87,6 +87,7 @@ _NPDI_SUITE_CUSTOM_FIELDS = [
     ("Task", "npdi_stage_name"),
     ("Task", "npdi_module"),
     ("Task", "npdi_responsible_role"),
+    ("Task", "task_owner"),
     ("Task", "npdi_requires_attachment"),
     ("Task", "npdi_launch_milestone"),
     ("Task", "npdi_baseline_start"),
@@ -352,6 +353,13 @@ def get_custom_fields():
                 "fieldtype": "Link",
                 "options": "Role",
                 "insert_after": "npdi_module"
+            },
+            {
+                "fieldname": "task_owner",
+                "label": "Responsable (Dueño)",
+                "fieldtype": "Link",
+                "options": "User",
+                "insert_after": "npdi_responsible_role"
             },
             {
                 "fieldname": "npdi_requires_attachment",

@@ -103,12 +103,10 @@
 }
 .drawer-comments-section, .drawer-comments {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: visible;
   display: flex;
   flex-direction: column;
   border-bottom: none;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
 }
 .drawer-section-title {
   font-size: var(--text-xs);

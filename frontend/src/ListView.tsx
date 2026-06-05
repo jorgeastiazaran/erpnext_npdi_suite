@@ -277,7 +277,7 @@ export default function ListView({
                 color: depth === 0 ? 'var(--text-primary)' : 'var(--text-secondary)'
               }}>
                 {task.name}
-                <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 500 }}>({task.assignedToRole || 'Rol no definido'})</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '10px', fontWeight: 500 }}>({task.role?.name || task.npdiResponsibleRole || 'Rol no definido'})</span>
                 
                 {task.isFixed && (
                   <span title="Fecha de inicio anclada manualmente" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', padding: '2px 6px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '10px', fontSize: '10px', fontWeight: 600, color: '#d97706' }}>

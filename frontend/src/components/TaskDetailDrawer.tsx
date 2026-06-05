@@ -206,6 +206,42 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
     });
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !taskId) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64Data = reader.result as string;
+      setUploading(true);
+      // @ts-ignore
+      window.frappe.call({
+        method: 'erpnext_npdi_suite.api.upload_task_attachment',
+        args: { task_id: taskId, filename: file.name, filedata: base64Data },
+        callback: (r: any) => {
+          setUploading(false);
+          if (r.message && r.message.success) {
+            setTaskDetail((prev) =>
+              prev ? { ...prev, attachments: [...prev.attachments, r.message.attachment] } : null
+            );
+            onRefresh();
+          } else {
+            setError(r.message?.error || 'Error al subir archivo');
+          }
+        },
+      });
+    };
+    reader.readAsDataURL(file);
+    
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleSave = () => {
     if (!taskId || durationEdit === null || durationEdit === taskDetail?.durationDays) return;
     // @ts-ignore
@@ -298,184 +334,197 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
           </button>
         </div>
 
-        {/* Status bar */}
-        <div className="drawer-section drawer-status-bar">
-          {Object.entries(STATUS_MAP).map(([key, { label, icon: Icon, color }]) => (
-            <button
-              key={key}
-              className={`status-btn ${taskDetail.status === key ? 'active' : ''}`}
-              style={{ '--status-color': color } as React.CSSProperties}
-              onClick={() => handleStatusChange(key)}
-              disabled={statusUpdating === key}
-            >
-              {statusUpdating === key ? (
-                <Loader2 size={16} className="animate-spin" />
-              ) : (
-                <Icon size={16} />
-              )}
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Info grid */}
-        <div className="drawer-section">
-          <div className="drawer-info-grid">
-            <div className="info-item">
-              <span className="info-label">
-                <ShieldCheck size={14} /> Rol Responsable
-              </span>
-              <span className="info-value">{taskDetail.role?.name || '-'}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">
-                <ShieldCheck size={14} /> Asignado a
-              </span>
-              <span className="info-value">
-                {taskDetail.assignedTo?.name || 'Sin asignar'}
-              </span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">
-                <Layers size={14} /> Etapa
-              </span>
-              <span className="info-value">{taskDetail.stageName || '-'}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">
-                <Calendar size={14} /> Fecha Plan
-              </span>
-              <span className="info-value">{formatDate(taskDetail.planEndDate)}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">
-                <Clock size={14} /> Duración (días)
-              </span>
-              <input
-                type="number"
-                className="info-input"
-                value={durationEdit ?? ''}
-                onChange={(e) => setDurationEdit(Number(e.target.value))}
-                min={0}
-                disabled={taskDetail.status === 'Completed'}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Dependencies section */}
-        <div className="drawer-section drawer-dependencies">
-          <h3 className="drawer-section-title">Depende de</h3>
-          <div className="dependency-list">
-            {taskDetail.dependencies.map((dep) => {
-              const depStatus = STATUS_MAP[dep.status] || STATUS_MAP.Pending;
-              const DepIcon = depStatus.icon;
-              return (
-                <div key={dep.id} className="dependency-item">
-                  <DepIcon size={16} style={{ color: depStatus.color }} />
-                  <span className="dependency-name">{dep.name}</span>
-                  <span className="dependency-stage">{dep.stageName}</span>
-                  <button
-                    className="dependency-remove"
-                    onClick={() => handleRemoveDependency(dep.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              );
-            })}
-            {taskDetail.dependencies.length === 0 && (
-              <p className="empty-state">Sin dependencias</p>
-            )}
-          </div>
-
-          <h3 className="drawer-section-title">Bloquea a</h3>
-          <div className="dependency-list read-only">
-            {taskDetail.blockedBy.map((blocked) => {
-              const blockStatus = STATUS_MAP[blocked.status] || STATUS_MAP.Pending;
-              const BlockIcon = blockStatus.icon;
-              return (
-                <div key={blocked.id} className="dependency-item">
-                  <BlockIcon size={16} style={{ color: blockStatus.color }} />
-                  <span className="dependency-name">{blocked.name}</span>
-                  <span className="dependency-stage">{blocked.stageName}</span>
-                </div>
-              );
-            })}
-            {taskDetail.blockedBy.length === 0 && (
-              <p className="empty-state">No bloquea a ninguna tarea</p>
-            )}
-          </div>
-        </div>
-
-        {/* Attachments section */}
-        <div className="drawer-section drawer-attachments">
-          <h3 className="drawer-section-title">Adjuntos</h3>
-          <div className="attachment-list">
-            {taskDetail.attachments.map((att, idx) => (
-              <a
-                key={idx}
-                href={att.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="attachment-item"
+        <div className="drawer-content-scroll" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {/* Status bar */}
+          <div className="drawer-section drawer-status-bar">
+            {Object.entries(STATUS_MAP).map(([key, { label, icon: Icon, color }]) => (
+              <button
+                key={key}
+                className={`status-btn ${taskDetail.status === key ? 'active' : ''}`}
+                style={{ '--status-color': color } as React.CSSProperties}
+                onClick={() => handleStatusChange(key)}
+                disabled={statusUpdating === key}
               >
-                <ExternalLink size={14} />
-                <span>{att.file_name}</span>
-              </a>
+                {statusUpdating === key ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Icon size={16} />
+                )}
+                <span>{label}</span>
+              </button>
             ))}
-            {taskDetail.attachments.length === 0 && (
-              <p className="empty-state">Sin adjuntos</p>
-            )}
           </div>
-          {/* "Open in Frappe" link matching reference – but this is inside attachments? Actually reference says at bottom. We'll also have a bottom link. */}
-        </div>
 
-        {/* Comments section - flex-grow and scrollable */}
-        <div className="drawer-section drawer-comments">
-          <h3 className="drawer-section-title">Comentarios</h3>
-          <div className="comments-list">
-            {taskDetail.comments.map((comment) => (
-              <div key={comment.id} className="comment-item">
-                <div className="comment-avatar">{getInitials(comment.author.name)}</div>
-                <div className="comment-body">
-                  <div className="comment-meta">
-                    <span className="comment-author">{comment.author.name}</span>
-                    <span className="comment-time">
-                      {new Date(comment.createdAt).toLocaleString('es-ES', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        day: 'numeric',
-                        month: 'short',
-                      })}
-                    </span>
-                  </div>
-                  <p className="comment-content">{comment.content}</p>
-                  <button
-                    className="comment-delete"
-                    onClick={() => handleDeleteComment(comment.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+          {/* Info grid */}
+          <div className="drawer-section">
+            <div className="drawer-info-grid">
+              <div className="info-item">
+                <span className="info-label">
+                  <ShieldCheck size={14} /> Rol Responsable
+                </span>
+                <span className="info-value">{taskDetail.role?.name || '-'}</span>
               </div>
-            ))}
-            {taskDetail.comments.length === 0 && (
-              <p className="empty-state">Sin comentarios</p>
-            )}
+              <div className="info-item">
+                <span className="info-label">
+                  <ShieldCheck size={14} /> Asignado a
+                </span>
+                <span className="info-value">
+                  {taskDetail.assignedTo?.name || 'Sin asignar'}
+                </span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">
+                  <Layers size={14} /> Etapa
+                </span>
+                <span className="info-value">{taskDetail.stageName || '-'}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">
+                  <Calendar size={14} /> Fecha Plan
+                </span>
+                <span className="info-value">{formatDate(taskDetail.planEndDate)}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">
+                  <Clock size={14} /> Duración (días)
+                </span>
+                <input
+                  type="number"
+                  className="info-input"
+                  value={durationEdit ?? ''}
+                  onChange={(e) => setDurationEdit(Number(e.target.value))}
+                  min={0}
+                  disabled={taskDetail.status === 'Completed'}
+                />
+              </div>
+            </div>
           </div>
-          <div className="comment-compose">
-            <textarea
-              className="comment-textarea"
-              placeholder="Escribe un comentario..."
-              value={newComment}
-              onChange={(e) => setNewComment(e.target.value)}
-              onKeyDown={handleCommentKeyDown}
-              rows={2}
-            />
-            <button className="comment-send" onClick={handleAddComment} disabled={!newComment.trim()}>
-              <Send size={16} />
-            </button>
+
+          {/* Dependencies section */}
+          <div className="drawer-section drawer-dependencies">
+            <h3 className="drawer-section-title">Depende de</h3>
+            <div className="dependency-list">
+              {taskDetail.dependencies.map((dep) => {
+                const depStatus = STATUS_MAP[dep.status] || STATUS_MAP.Pending;
+                const DepIcon = depStatus.icon;
+                return (
+                  <div key={dep.id} className="dependency-item">
+                    <DepIcon size={16} style={{ color: depStatus.color }} />
+                    <span className="dependency-name">{dep.name}</span>
+                    <span className="dependency-stage">{dep.stageName}</span>
+                    <button
+                      className="dependency-remove"
+                      onClick={() => handleRemoveDependency(dep.id)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+              {taskDetail.dependencies.length === 0 && (
+                <p className="empty-state">Sin dependencias</p>
+              )}
+            </div>
+
+            <h3 className="drawer-section-title">Bloquea a</h3>
+            <div className="dependency-list read-only">
+              {taskDetail.blockedBy.map((blocked) => {
+                const blockStatus = STATUS_MAP[blocked.status] || STATUS_MAP.Pending;
+                const BlockIcon = blockStatus.icon;
+                return (
+                  <div key={blocked.id} className="dependency-item">
+                    <BlockIcon size={16} style={{ color: blockStatus.color }} />
+                    <span className="dependency-name">{blocked.name}</span>
+                    <span className="dependency-stage">{blocked.stageName}</span>
+                  </div>
+                );
+              })}
+              {taskDetail.blockedBy.length === 0 && (
+                <p className="empty-state">No bloquea a ninguna tarea</p>
+              )}
+            </div>
+          </div>
+
+          {/* Attachments section */}
+          <div className="drawer-section drawer-attachments">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+              <h3 className="drawer-section-title" style={{ margin: 0 }}>Adjuntos</h3>
+              <button 
+                className="btn btn-ghost" 
+                style={{ fontSize: '11px', padding: '2px 8px', height: 'auto', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border)' }}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+              >
+                {uploading ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                Subir
+              </button>
+              <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} />
+            </div>
+            <div className="attachment-list">
+              {taskDetail.attachments.map((att, idx) => (
+                <a
+                  key={idx}
+                  href={att.file_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="attachment-item"
+                >
+                  <ExternalLink size={14} />
+                  <span>{att.file_name}</span>
+                </a>
+              ))}
+              {taskDetail.attachments.length === 0 && (
+                <p className="empty-state">Sin adjuntos</p>
+              )}
+            </div>
+          </div>
+
+          {/* Comments section - flex-grow and scrollable */}
+          <div className="drawer-section drawer-comments">
+            <h3 className="drawer-section-title">Comentarios</h3>
+            <div className="comments-list">
+              {taskDetail.comments.map((comment) => (
+                <div key={comment.id} className="comment-item">
+                  <div className="comment-avatar">{getInitials(comment.author.name)}</div>
+                  <div className="comment-body">
+                    <div className="comment-meta">
+                      <span className="comment-author">{comment.author.name}</span>
+                      <span className="comment-time">
+                        {new Date(comment.createdAt).toLocaleString('es-ES', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          day: 'numeric',
+                          month: 'short',
+                        })}
+                      </span>
+                    </div>
+                    <p className="comment-content">{comment.content}</p>
+                    <button
+                      className="comment-delete"
+                      onClick={() => handleDeleteComment(comment.id)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {taskDetail.comments.length === 0 && (
+                <p className="empty-state">Sin comentarios</p>
+              )}
+            </div>
+            <div className="comment-compose">
+              <textarea
+                className="comment-textarea"
+                placeholder="Escribe un comentario..."
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                onKeyDown={handleCommentKeyDown}
+                rows={2}
+              />
+              <button className="comment-send" onClick={handleAddComment} disabled={!newComment.trim()}>
+                <Send size={16} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -495,14 +544,23 @@ const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({ taskId, onClose, on
             Abrir en Frappe
           </a>
           
-          <button 
-            className="btn btn-primary" 
-            onClick={handleSave}
-            disabled={durationEdit === taskDetail.durationDays || taskDetail.status === 'Completed'}
-            style={{ padding: '6px 16px', fontSize: '12px' }}
-          >
-            Guardar Cambios
-          </button>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <button 
+              className="btn" 
+              onClick={onClose}
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
+            >
+              Cancelar
+            </button>
+            <button 
+              className="btn btn-primary" 
+              onClick={handleSave}
+              disabled={durationEdit === taskDetail.durationDays || taskDetail.status === 'Completed'}
+              style={{ padding: '6px 16px', fontSize: '12px' }}
+            >
+              Guardar Cambios
+            </button>
+          </div>
         </div>
       </div>
     </>

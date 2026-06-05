@@ -34,7 +34,7 @@ def get_project_gantt_data(project=None, template=None):
             'npdi_module as npdiModule',
             'npdi_cpm_is_critical as isCritical', 'npdi_cpm_total_float as slack',
             'npdi_baseline_start as baselineStartDate', 'npdi_baseline_end as baselineEndDate',
-            'npdi_responsible_role as npdiResponsibleRole', '_assign as assignedTo',
+            'npdi_responsible_role as npdiResponsibleRole', 'task_owner',
             'npdi_cpm_manual_dates as isFixed', 'npdi_requires_attachment as requiresAttachment'
         ]
     )
@@ -91,16 +91,10 @@ def get_project_gantt_data(project=None, template=None):
         else:
             t['role'] = None
 
-        assigned_list = []
-        if t.get('assignedTo'):
-            try:
-                assigned_list = frappe.parse_json(t['assignedTo'])
-            except Exception:
-                pass
-        if assigned_list and isinstance(assigned_list, list):
-            user_email = assigned_list[0]
+        if t.get('task_owner'):
+            user_email = t.get('task_owner')
             user_name = frappe.db.get_value("User", user_email, "full_name") or user_email
-            t['assignedTo'] = {'name': user_name, 'email': user_email}
+            t['assignedTo'] = user_name
         else:
             t['assignedTo'] = None
         
@@ -1070,18 +1064,15 @@ def get_task_detail(task_id):
             'Cancelled': 'Skipped'
         }
 
-        # Parse _assign
+        # Parse task_owner (custom field)
         assigned_to = None
-        if task.get("_assign"):
+        if task.get("task_owner"):
             try:
-                assign_list = json.loads(task._assign)
-                if assign_list and isinstance(assign_list, list):
-                    first_email = assign_list[0]
-                    full_name = frappe.db.get_value("User", first_email, "full_name") or first_email
-                    assigned_to = {"name": full_name, "email": first_email}
+                user_email = task.task_owner
+                full_name = frappe.db.get_value("User", user_email, "full_name") or user_email
+                assigned_to = {"name": full_name, "email": user_email}
             except Exception:
                 pass
-
         # Dependencies (tasks this one depends on)
         dependencies = []
         for dep in (task.depends_on or []):
@@ -1221,6 +1212,43 @@ def add_task_comment(task_id, content):
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "add_task_comment")
         return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def upload_task_attachment(task_id, filename, filedata):
+    """Upload a file to a Task using base64 encoded data."""
+    try:
+        task = frappe.get_doc("Task", task_id)
+        task.check_permission("write")
+
+        if filedata.startswith("data:"):
+            filedata = filedata.split(",", 1)[1]
+
+        file_doc = frappe.get_doc({
+            "doctype": "File",
+            "file_name": filename,
+            "attached_to_doctype": "Task",
+            "attached_to_name": task_id,
+            "content": filedata,
+            "decode_base64": 1,
+            "is_private": 0
+        })
+        file_doc.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "attachment": {
+                "name": file_doc.name,
+                "file_name": file_doc.file_name,
+                "file_url": file_doc.file_url
+            }
+        }
+    except frappe.PermissionError:
+        return {"success": False, "error": "No tienes permisos para subir archivos."}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "upload_task_attachment")
+        return {"success": False, "error": str(e)}
+
 
 
 @frappe.whitelist()
@@ -1595,7 +1623,7 @@ def get_frappe_users_for_project():
 
 
 @frappe.whitelist()
-def create_project_from_template(project_name, template_name, start_date, owner=None, task_overrides=None):
+def create_project_from_template(project_name, template_name, start_date, owner=None, task_overrides=None, role_assignments=None):
     """
     Creates a Frappe Project from a Project Template, then applies optional
     task overrides (duration changes, skipped tasks).
@@ -1606,6 +1634,7 @@ def create_project_from_template(project_name, template_name, start_date, owner=
         start_date: Project start date (YYYY-MM-DD)
         owner: Frappe user email to assign as project owner (optional)
         task_overrides: JSON string of [{templateTaskRowName, durationDays, isSkipped}]
+        role_assignments: JSON string of { roleName: userEmail } mapping
     """
     from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
     import json as json_module
@@ -1630,6 +1659,7 @@ def create_project_from_template(project_name, template_name, start_date, owner=
         frappe.db.commit()
 
         # 2. Apply task overrides if provided
+        has_changes = False
         if task_overrides:
             overrides = json_module.loads(task_overrides) if isinstance(task_overrides, str) else task_overrides
 
@@ -1654,7 +1684,6 @@ def create_project_from_template(project_name, template_name, start_date, owner=
                 if position < len(generated_tasks):
                     row_to_generated[tmpl.name] = generated_tasks[position].name
 
-            has_changes = False
             for override in overrides:
                 row_name = override.get("templateTaskRowName")
                 gen_task_name = row_to_generated.get(row_name)
@@ -1676,16 +1705,33 @@ def create_project_from_template(project_name, template_name, start_date, owner=
                     frappe.db.set_value("Task", gen_task_name, updates)
                     has_changes = True
 
-            # 3. Re-run CPM after overrides
-            if has_changes:
-                frappe.local.cpm_processing = True
-                try:
-                    engine = CPMEngine(project.name)
-                    engine.compute()
-                finally:
-                    frappe.local.cpm_processing = False
+        # 3. Apply role assignments (independent of task_overrides)
+        if role_assignments:
+            assignments = json_module.loads(role_assignments) if isinstance(role_assignments, str) else role_assignments
+            if assignments:
+                # Fetch all generated tasks with their roles
+                tasks_with_roles = frappe.get_all(
+                    "Task",
+                    filters={"project": project.name},
+                    fields=["name", "npdi_responsible_role"]
+                )
+                for t in tasks_with_roles:
+                    if t.npdi_responsible_role and t.npdi_responsible_role in assignments:
+                        assigned_user = assignments[t.npdi_responsible_role]
+                        if assigned_user:
+                            frappe.db.set_value("Task", t.name, "task_owner", assigned_user)
+                            has_changes = True
 
-            frappe.db.commit()
+        # 4. Re-run CPM after overrides
+        if has_changes:
+            frappe.local.cpm_processing = True
+            try:
+                engine = CPMEngine(project.name)
+                engine.compute()
+            finally:
+                frappe.local.cpm_processing = False
+
+        frappe.db.commit()
 
         return {"success": True, "project_name": project.name}
 
