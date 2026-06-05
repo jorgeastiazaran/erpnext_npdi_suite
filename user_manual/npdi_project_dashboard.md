@@ -34,12 +34,20 @@ The dashboard is fully interactive. You can modify your schedule directly from t
 - **Drag-and-Drop:** Drag task bars in the Gantt chart to shift their start and finish dates.
 - **Extend Duration:** Click and drag the edge of a task bar to extend or shorten its duration.
 
-### Editing Dependencies & Status:
-- **Establish Dependencies:** Draw connector lines between task bars to set predecessors.
-- **Update Status:** Double-click a task node to open a quick-edit dialog. Here, you can:
-  - Update status (Pending, In Progress, Completed).
-  - Assign task owners.
-  - View baseline variance metrics.
+### Contextual Action Buttons:
+When you hover over or view a task in the left panel, several action buttons appear next to the task name:
+- **Target Icon (🎯):** Centers the Gantt chart view directly onto the task's timeline bar.
+- **Plus Icon (➕):** Quickly add a new sub-task under this phase.
+- **Trash Icon (🗑️):** Delete the task (if it's not a fixed milestone).
+
+### Task Detail Drawer (Quick Edit Panel):
+- **Update Status:** Double-click a task row in the left panel to open the sliding **Task Detail Drawer**.
+- **Edit Task Settings:** Here, you can change the status (Pending, In Progress, Completed), view baseline variance, or edit the manual duration.
+- **Manage Attachments:** Use the "+ Subir" button in the **Adjuntos** section to natively upload files and link them to the ERPNext Task.
+- **Collaborate with Comments:** Use the text box at the bottom of the drawer to write and send comments natively to the Frappe Communications log.
+
+> [!TIP]
+> The Task Detail Drawer is fully scrollable, keeping the Save and Cancel buttons easily accessible at the bottom of the screen regardless of how many comments or attachments are loaded.
 
 > [!NOTE]
 > Modifying task dates or dependencies on the dashboard automatically triggers the background CPM engine to update predecessor dates and re-evaluate critical paths.

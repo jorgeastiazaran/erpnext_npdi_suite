@@ -23,17 +23,20 @@ Standard ERPNext templates define basic task names. The NPDI Suite extends `Proj
 
 ## 2. Initiating a Project from a Template
 
-When you create a new Project and select the template:
+Creating a project from a template is now streamlined through the React-based NPDI Project Creation modal.
 
-1. Navigate to **Project** and click **Add Project**.
-2. Select the **Project Template** you defined.
-3. Set the **Start Date** of the project.
-4. Save the Project.
+1. Navigate to the **NPDI Project Dashboard**.
+2. Click **+ Nuevo Proyecto** in the upper right.
+3. In the modal, specify the **Project Name** and select the **Project Template**.
+4. Set the **Target Launch Date** (Fecha de Lanzamiento). The CPM engine will schedule tasks backward from this date.
+5. **Role Assignment:** The modal automatically extracts all roles defined in the template tasks. You will be prompted to map a specific system user to each required role (e.g., assigning John Doe to "Lead Formulator").
+6. Click **Confirmar y crear**.
 
 ### How Attributes Propagate:
 
 Upon saving, the NPDI Suite runs an interception hook that:
 1. Generates the child **Project Tasks**.
-2. Copies advanced metadata: maps the template task's **NPDI Module**, **Duration**, and **Responsible Role** directly to each `Task` record.
-3. Establishes the **Dependency Chain**: links predecessor tasks automatically.
-4. Triggers the **CPM Engine** to schedule start and finish dates starting from the project's start date.
+2. Copies advanced metadata: maps the template task's **NPDI Module** and **Duration** to each `Task` record.
+3. **Task Ownership:** Maps your chosen user from the Role Assignment step directly into the native `task_owner` field of each corresponding task.
+4. Establishes the **Dependency Chain**: links predecessor tasks automatically.
+5. Triggers the **CPM Engine** to calculate the critical path and schedule dates.

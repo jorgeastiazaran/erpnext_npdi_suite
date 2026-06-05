@@ -26,7 +26,7 @@ const TemplateListPage: React.FC<Props> = ({ onEditTemplate }) => {
     try {
       // @ts-ignore
       const result = await window.frappe.call('erpnext_npdi_suite.api.get_template_list');
-      setTemplates(result.message || []);
+      setTemplates(result.message?.data || []);
     } catch (error) {
       console.error('Failed to fetch templates:', error);
       alert('Error al cargar las plantillas.');

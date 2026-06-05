@@ -6,6 +6,7 @@ import GanttView from './GanttView'
 import ListView from './ListView'
 import TaskDetailDrawer from './components/TaskDetailDrawer'
 import ProjectCreationModal from './components/ProjectCreationModal'
+import NpdiLayout from './components/layout/NpdiLayout'
 import { Calendar, List, ChevronRight } from 'lucide-react'
 import './App.css'
 import { toISODateString } from './dateUtils'
@@ -110,6 +111,17 @@ function App() {
   useEffect(() => {
     fetchTasks();
 
+    const handleRouteChange = () => {
+      // Small timeout to allow Frappe routing to settle
+      setTimeout(() => {
+        setLoading(true);
+        fetchTasks();
+      }, 50);
+    };
+
+    window.addEventListener('npdi_route_changed', handleRouteChange);
+    window.addEventListener('popstate', handleRouteChange);
+
     // Lógica para detectar y observar el tema activo de ERPNext / Frappe
     const checkTheme = () => {
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
@@ -125,7 +137,11 @@ function App() {
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-color-scheme', 'class'] });
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('npdi_route_changed', handleRouteChange);
+      window.removeEventListener('popstate', handleRouteChange);
+    };
   }, []);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Cargando Cronograma...</div>;
@@ -376,18 +392,18 @@ function App() {
   
   if (appMode === 'template_list') {
     return (
-      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+      <NpdiLayout appMode={appMode}>
         <TemplateListPage onEditTemplate={(name) => {
           // Temporarily navigate to the template
           window.location.href = `/app/project-template/${name}`;
         }} />
-      </div>
+      </NpdiLayout>
     );
   }
 
   if (appMode === 'project_dashboard') {
     return (
-      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+      <NpdiLayout appMode={appMode}>
         <ProjectsDashboard
           onOpenProject={(name) => {
             window.location.href = `/app/project/${name}`;
@@ -402,151 +418,148 @@ function App() {
             window.location.href = `/app/project/${projectName}`;
           }}
         />
-      </div>
+      </NpdiLayout>
     );
   }
 
   if (appMode === 'template_editor' && templateData) {
     const roles = ["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => ({name: r, id: r}));
     return (
-      <div className={`theme-${theme}`} style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px' }}>
+      <NpdiLayout appMode={appMode} projectName={templateData.project_template_name}>
         <TemplateEditorView template={{ ...templateData, tasks: tasks }} allRoles={roles} onRefresh={fetchTasks} />
-      </div>
+      </NpdiLayout>
     );
   }
 
   return (
-    <div className={`theme-${theme}`} style={{ padding: '20px', background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', transition: 'background 0.3s, color 0.3s' }}>
+    <NpdiLayout appMode={appMode} projectName={projectMeta?.name}>
+      <div className={`theme-${theme}`} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
 
-      {/* Header and Switcher Section */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'var(--text-muted)', fontSize: '12px', marginBottom: 'var(--space-2)' }}>
-            <span>Proyectos NPDI</span>
-            <ChevronRight size={12} />
-            <span>{projectMeta?.name || 'Cargando...'}</span>
-          </div>
-          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 8px 0' }}>
-            {projectMeta?.name || 'NPDI Project Timeline'}
-          </h1>
-          {projectMeta && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
-                <Calendar size={14} />
-                Lanzamiento Objetivo: {projectMeta.target_launch_date ? new Date(projectMeta.target_launch_date).toLocaleDateString() : 'Por definir'}
+        {/* Header and Switcher Section */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
+          <div>
+            <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 8px 0' }}>
+              {projectMeta?.name || 'NPDI Project Timeline'}
+            </h1>
+            {projectMeta && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
+                  <Calendar size={14} />
+                  Lanzamiento Objetivo: {projectMeta.target_launch_date ? new Date(projectMeta.target_launch_date).toLocaleDateString() : 'Por definir'}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          {/* Recalculate Button */}
-          <button
-            onClick={handleRecalculateCpm}
-            disabled={loading}
-            style={{
-              padding: '6px 14px',
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            {/* Recalculate Button */}
+            <button
+              onClick={handleRecalculateCpm}
+              disabled={loading}
+              style={{
+                padding: '6px 14px',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                background: 'var(--bg-surface)',
+                color: 'var(--text-secondary)',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              {loading ? 'Calculando...' : 'Recalcular Ruta Crítica'}
+            </button>
+
+            {/* Premium View Switcher Button Group */}
+            <div style={{
+              display: 'flex',
+              background: 'var(--bg-surface-2)',
               border: '1px solid var(--border)',
-              borderRadius: '6px',
-              background: 'var(--bg-surface)',
-              color: 'var(--text-secondary)',
-              fontSize: '13px',
-              fontWeight: '600',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            {loading ? 'Calculando...' : 'Recalcular Ruta Crítica'}
-          </button>
+              borderRadius: '8px',
+              padding: '2px',
+              boxShadow: 'var(--shadow)'
+            }}>
+            <button
+              onClick={() => setActiveView('gantt')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                border: 'none',
+                borderRadius: '6px',
+                background: activeView === 'gantt' ? 'var(--accent)' : 'transparent',
+                color: activeView === 'gantt' ? '#ffffff' : 'var(--text)',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                fontFamily: 'var(--sans)',
+              }}
+            >
+              <Calendar size={14} />
+              Cronograma
+            </button>
+            <button
+              onClick={() => setActiveView('list')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                border: 'none',
+                borderRadius: '6px',
+                background: activeView === 'list' ? 'var(--accent)' : 'transparent',
+                color: activeView === 'list' ? '#ffffff' : 'var(--text)',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                fontFamily: 'var(--sans)',
+              }}
+            >
+              <List size={14} />
+              Vista de Lista
+            </button>
+          </div>
+          </div>
+        </div>
 
-          {/* Premium View Switcher Button Group */}
-          <div style={{
-            display: 'flex',
-            background: 'var(--bg-surface-2)',
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            padding: '2px',
-            boxShadow: 'var(--shadow)'
-          }}>
-          <button
-            onClick={() => setActiveView('gantt')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 14px',
-              border: 'none',
-              borderRadius: '6px',
-              background: activeView === 'gantt' ? 'var(--accent)' : 'transparent',
-              color: activeView === 'gantt' ? '#ffffff' : 'var(--text)',
-              fontSize: '13px',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              fontFamily: 'var(--sans)',
-            }}
-          >
-            <Calendar size={14} />
-            Cronograma
-          </button>
-          <button
-            onClick={() => setActiveView('list')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 14px',
-              border: 'none',
-              borderRadius: '6px',
-              background: activeView === 'list' ? 'var(--accent)' : 'transparent',
-              color: activeView === 'list' ? '#ffffff' : 'var(--text)',
-              fontSize: '13px',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              fontFamily: 'var(--sans)',
-            }}
-          >
-            <List size={14} />
-            Vista de Lista
-          </button>
-        </div>
-        </div>
+        {activeView === 'gantt' ? (
+          <GanttView
+            tasks={tasks}
+            onTaskClick={handleTaskClick}
+            onStatusChange={handleStatusChange}
+            onDateChange={handleDateChange}
+            onAddQuickTask={handleAddQuickTask}
+            projectMeta={projectMeta}
+            onCaptureBaseline={handleCaptureBaseline}
+          />
+        ) : (
+          <ListView
+            tasks={tasks}
+            onTaskClick={handleTaskClick}
+            onStatusChange={handleStatusChange}
+            onAddQuickTask={handleAddQuickTask}
+            onDeleteQuickTask={handleDeleteTask}
+            onAddTaskDependency={handleAddTaskDependency}
+            onSkipTask={handleSkipTask}
+            onUpdateTask={handleUpdateTask}
+          />
+        )}
+
+        {selectedTaskId && (
+          <TaskDetailDrawer
+            taskId={selectedTaskId}
+            onClose={() => setSelectedTaskId(null)}
+            onRefresh={fetchTasks}
+          />
+        )}
       </div>
-
-      {activeView === 'gantt' ? (
-        <GanttView
-          tasks={tasks}
-          onTaskClick={handleTaskClick}
-          onStatusChange={handleStatusChange}
-          onDateChange={handleDateChange}
-          onAddQuickTask={handleAddQuickTask}
-          projectMeta={projectMeta}
-          onCaptureBaseline={handleCaptureBaseline}
-        />
-      ) : (
-        <ListView
-          tasks={tasks}
-          onTaskClick={handleTaskClick}
-          onStatusChange={handleStatusChange}
-          onAddQuickTask={handleAddQuickTask}
-          onDeleteQuickTask={handleDeleteTask}
-          onAddTaskDependency={handleAddTaskDependency}
-          onSkipTask={handleSkipTask}
-          onUpdateTask={handleUpdateTask}
-        />
-      )}
-
-      {selectedTaskId && (
-        <TaskDetailDrawer
-          taskId={selectedTaskId}
-          onClose={() => setSelectedTaskId(null)}
-          onRefresh={fetchTasks}
-        />
-      )}
-    </div>
+    </NpdiLayout>
   )
 }
 

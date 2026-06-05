@@ -1502,12 +1502,13 @@ def duplicate_template(template_name: str):
             new_child.parentfield = "tasks"
             new_child.parenttype = "Project Template"
             new_child.task = new_task_name
-            new_child.duration = child.duration
-            new_child.stage = child.stage
-            new_child.module = child.module
-            new_child.role = child.role
-            new_child.milestone = child.milestone
-            new_child.parent_task = child.parent_task  # will be updated later
+            new_child.duration = child.get("duration", 0)
+            new_child.npdi_stage_name = child.get("npdi_stage_name")
+            new_child.npdi_module = child.get("npdi_module")
+            new_child.npdi_responsible_role = child.get("npdi_responsible_role")
+            new_child.npdi_launch_milestone = child.get("npdi_launch_milestone")
+            if child.get("parent_task"):
+                new_child.set("parent_task", child.get("parent_task"))
             new_child.insert(ignore_permissions=True)
             old_child_row_to_new_child_row[child.name] = new_child.name
             new_tasks_child.append(new_child)
@@ -1582,11 +1583,11 @@ def export_template_csv(template_name: str):
             task_deps = ", ".join(dep_map.get(t.task, []))
             writer.writerow([
                 t.task, 
-                t.stage, 
-                t.module, 
-                t.role, 
-                t.duration, 
-                "Yes" if t.milestone else "No", 
+                t.get("npdi_stage_name", ""), 
+                t.get("npdi_module", ""), 
+                t.get("npdi_responsible_role", ""), 
+                t.get("duration", 0), 
+                "Yes" if t.get("npdi_launch_milestone") else "No", 
                 task_deps
             ])
         csv_string = output.getvalue()

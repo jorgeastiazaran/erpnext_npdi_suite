@@ -1,22 +1,37 @@
 :root {
   --bg-surface: #ffffff;
   --bg-surface-2: #f9fafb;
+  --bg-canvas: #f3f4f6;
   --text-primary: #1f2937;
-  --text-muted: #6b7280;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --border: #e5e7eb;
+  --hover-bg: #f3f4f6;
+  --accent: #2563eb;
 }
 
 .theme-light {
   --bg-surface: #ffffff;
   --bg-surface-2: #f9fafb;
+  --bg-canvas: #f3f4f6;
   --text-primary: #1f2937;
-  --text-muted: #6b7280;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --border: #e5e7eb;
+  --hover-bg: #f3f4f6;
+  --accent: #2563eb;
 }
 
 .theme-dark {
   --bg-surface: #16171d;
   --bg-surface-2: #1f2028;
+  --bg-canvas: #0f1015;
   --text-primary: #f3f4f6;
+  --text-secondary: #d1d5db;
   --text-muted: #9ca3af;
+  --border: #2d303b;
+  --hover-bg: #2d303b;
+  --accent: #3b82f6;
 }
 
 .gantt-container [class*="taskList"] { 
