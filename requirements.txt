@@ -1,0 +1,10 @@
+# ERPNext NPDI Suite Python Dependencies
+# 
+# This file is intentionally left empty because the current 
+# implementation relies solely on the Python Standard Library 
+# and the Frappe/ERPNext framework.
+#
+# If you add third-party python packages to your project in the future,
+# list them here (e.g. pandas==1.5.3). 
+# Frappe 'bench get-app' or 'bench update' will automatically 
+# install them in the bench's virtual environment.
