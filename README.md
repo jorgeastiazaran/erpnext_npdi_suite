@@ -24,10 +24,10 @@ A través de una integración fluida usando Vite y React, la aplicación secuest
 
 ## 💻 Requisitos del Sistema
 
-- **Framework Frappe:** Versión 14 o 15.
-- **ERPNext:** Versión 14 o 15.
-- **Python:** 3.10 o superior.
-- **Node.js:** v16, v18 o v20 (Requerido para compilar la aplicación React).
+- **Framework Frappe:** Versión 13.
+- **ERPNext:** Versión 13.
+- **Python:** 3.7 o superior.
+- **Node.js:** v14, v16, v18 o v20 (Requerido para compilar la aplicación React).
 - **NPM o Yarn:** Administradores de paquetes.
 
 ## ⚙️ Instrucciones de Instalación
