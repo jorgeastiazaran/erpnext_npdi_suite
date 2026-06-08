@@ -173,7 +173,7 @@ def update_task_status(task_id, status):
 def update_task_dates(task_id, start, end):
     from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
     try:
-        frappe.has_permission('Task', 'write', throw=True)
+        frappe.has_permission('Task', 'write', doc=task_id, throw=True)
         
         # Calculate duration
         from frappe.utils import date_diff
@@ -211,12 +211,11 @@ def update_project_task(task_id, task_data):
     from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
     
     try:
-        frappe.has_permission('Task', 'write', throw=True)
-        
         if isinstance(task_data, str):
             task_data = json.loads(task_data)
             
         task = frappe.get_doc('Task', task_id)
+        task.check_permission('write')
         
         # Mapping frontend values
         if "name" in task_data:
@@ -260,6 +259,7 @@ def delete_task(task_id):
 
     try:
         task = frappe.get_doc('Task', task_id)
+        task.check_permission('delete')
         project = task.project
         frappe.delete_doc('Task', task_id)
 
@@ -320,6 +320,7 @@ def capture_project_baseline(project_name):
     Capture baseline for a project.
     """
     try:
+        frappe.has_permission('Project', 'write', doc=project_name, throw=True)
         from erpnext_npdi_suite.erpnext_npdi_suite.engine import cpm
         res = cpm.capture_project_baseline(project_name)
         return {"success": True, "message": res.get("message") if isinstance(res, dict) else str(res)}
@@ -982,10 +983,11 @@ def get_project_dashboard_data():
     Returns aggregated dashboard statistics and a list of active NPDI projects.
     """
     try:
+        print("====== DEBUGGING GET PROJECT DASHBOARD DATA WITH BASELINE ======")
         active_projects = frappe.get_all(
             "Project",
             filters={"status": "Open"},
-            fields=["name", "project_name", "expected_end_date", "status"]
+            fields=["name", "project_name", "expected_end_date", "status", "npdi_baseline_end", "npdi_baseline_locked"]
         )
 
         total_active = len(active_projects)
@@ -993,11 +995,15 @@ def get_project_dashboard_data():
         global_progress_sum = 0.0
 
         projects = []
+        all_tasks = []
+        unique_owners = set()
+
         for proj in active_projects:
             tasks = frappe.get_all(
                 "Task",
                 filters={"project": proj.name},
-                fields=["status", "exp_end_date"]
+                fields=["name as id", "subject as taskName", "status", "exp_end_date", "exp_start_date", "npdi_stage_name", "task_owner"],
+                order_by="exp_start_date asc"
             )
 
             completed = 0
@@ -1006,8 +1012,34 @@ def get_project_dashboard_data():
             for t in tasks:
                 if t.status == "Completed":
                     completed += 1
-                if t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.getdate() and t.status != "Completed"):
+                
+                is_delayed = t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.getdate() and t.status != "Completed")
+                if is_delayed:
                     delayed += 1
+                
+                if t.task_owner:
+                    unique_owners.add(t.task_owner)
+                    
+                all_tasks.append({
+                    "id": t.id,
+                    "taskName": t.taskName,
+                    "status": t.status,
+                    "project": proj.name,
+                    "projectName": proj.project_name or proj.name,
+                    "stage": t.npdi_stage_name or "-",
+                    "startDate": str(t.exp_start_date or ""),
+                    "endDate": str(t.exp_end_date or ""),
+                    "owner": t.task_owner or "Sin asignar",
+                    "isDelayed": bool(is_delayed)
+                })
+
+            active_task = next((t for t in tasks if t.status not in ("Completed", "Cancelled", "Template", "Skipped")), None)
+            
+            current_stage = "-"
+            if active_task and active_task.npdi_stage_name:
+                current_stage = active_task.npdi_stage_name
+            elif total > 0 and completed == total:
+                current_stage = "Completado"
 
             progress = round((completed / total * 100), 1) if total > 0 else 0.0
 
@@ -1017,8 +1049,10 @@ def get_project_dashboard_data():
             projects.append({
                 "name": proj.name,
                 "title": proj.project_name or proj.name,
-                "stage": "-",
+                "stage": current_stage,
                 "targetLaunchDate": str(proj.expected_end_date or ""),
+                "baselineLaunchDate": str(proj.npdi_baseline_end or ""),
+                "isBaselineLocked": bool(proj.npdi_baseline_locked),
                 "progress": progress,
                 "status": "Active" if proj.status == "Open" else proj.status
             })
@@ -1031,7 +1065,9 @@ def get_project_dashboard_data():
                 "delayedTasks": delayed_tasks,
                 "globalProgress": global_progress
             },
-            "projects": projects
+            "projects": projects,
+            "tasks": all_tasks,
+            "owners": list(unique_owners)
         }
 
         return {"success": True, "data": data}
@@ -1368,6 +1404,34 @@ from io import StringIO
 from collections import defaultdict, deque
 
 @frappe.whitelist()
+def create_empty_template(template_name):
+    try:
+        if frappe.db.exists("Project Template", template_name):
+            return {"success": False, "error": f"La plantilla '{template_name}' ya existe."}
+            
+        doc = frappe.get_doc({
+            "doctype": "Project Template",
+            "name": template_name,
+            "project_template_name": template_name,
+            "project_type": "Internal"
+        })
+        doc.insert(ignore_mandatory=True)
+        return {"success": True, "name": doc.name}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "create_empty_template Error")
+        return {"success": False, "error": str(e)}
+
+@frappe.whitelist()
+def get_erpnext_roles():
+    """Returns a list of active ERPNext roles formatted for the frontend."""
+    try:
+        roles = frappe.get_all("Role", filters={"disabled": 0}, fields=["name as id", "role_name as name"])
+        return {"success": True, "data": roles}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_erpnext_roles Error")
+        return {"success": False, "error": str(e), "data": []}
+
+@frappe.whitelist()
 def get_template_list():
     """Return list of all Project Templates with summary info."""
     try:
@@ -1559,43 +1623,184 @@ def duplicate_template(template_name: str):
 
 @frappe.whitelist()
 def export_template_csv(template_name: str):
-    """Export template tasks as CSV string."""
+    """Export template tasks as an enriched CSV string for portability."""
     try:
         template = frappe.get_doc("Project Template", template_name)
         tasks = template.get("tasks")
         deps = template.get("npdi_task_dependencies")
-        # Build dependency mapping: for each task (by row name), list of depends on (row names)
+        
+        # Build dependency mapping (dependent_row_name -> list of predecessor_row_names)
         dep_map = defaultdict(list)
-        for d in deps:
-            # Use the actual task name (field 'task' is link to Task, not row name)
-            # We need to map between row name and task name. For dependencies, we assume 
-            # the 'task' field refers to the same child row? Or link to Task? Typically dependency 
-            # links are between tasks, so we use task names.
-            # We'll use the 'task' field (link to Task) to identify tasks.
-            # For output, we need to combine dependencies as comma-separated task names.
-            # This depends on schema; we'll assume 'task' field is Task name, 'depends_on' is also Task name.
+        for d in (deps or []):
             dep_map[d.task].append(d.depends_on)
-
+        
+        # 1. Fetch Task data & assign CSV IDs
+        task_data_map = {}
+        row_csv_id_map = {} # Project Template Task row name -> csv_id
+        task_csv_id_map = {} # Task name -> csv_id
+        current_id = 1
+        
+        for t in tasks:
+            if t.task:
+                task_doc = frappe.db.get_value(
+                    "Task", t.task, 
+                    ["subject", "description", "is_group", "is_milestone", "parent_task"], 
+                    as_dict=True
+                )
+                if task_doc:
+                    task_data_map[t.task] = task_doc
+                    row_csv_id_map[t.name] = str(current_id)
+                    task_csv_id_map[t.task] = str(current_id)
+                    current_id += 1
+        
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Task Name", "Stage", "Module", "Role", "Duration", "Milestone", "Dependencies"])
+        writer.writerow([
+            "ID", "Subject", "Description", "Is Group", "Is Milestone", "Parent ID", 
+            "Duration Days", "Duration Unit", "Stage Name", "Module", "Role", 
+            "Requires Attachment", "Launch Milestone", "Depends On IDs"
+        ])
+        
         for t in tasks:
-            task_deps = ", ".join(dep_map.get(t.task, []))
+            if not t.task or t.name not in row_csv_id_map:
+                continue
+                
+            tdoc = task_data_map[t.task]
+            csv_id = row_csv_id_map[t.name]
+            parent_id = task_csv_id_map.get(tdoc.parent_task, "")
+            
+            # Map depends on row names to CSV IDs
+            task_deps = dep_map.get(t.name, [])
+            dep_csv_ids = [row_csv_id_map[d] for d in task_deps if d in row_csv_id_map]
+            
             writer.writerow([
-                t.task, 
-                t.get("npdi_stage_name", ""), 
-                t.get("npdi_module", ""), 
-                t.get("npdi_responsible_role", ""), 
-                t.get("duration", 0), 
-                "Yes" if t.get("npdi_launch_milestone") else "No", 
-                task_deps
+                csv_id,
+                tdoc.subject or "",
+                tdoc.description or "",
+                1 if tdoc.is_group else 0,
+                1 if tdoc.is_milestone else 0,
+                parent_id,
+                t.get("duration", 0),
+                t.get("npdi_duration_unit", "Day"),
+                t.get("npdi_stage_name", ""),
+                t.get("npdi_module", ""),
+                t.get("npdi_responsible_role", ""),
+                1 if t.get("npdi_requires_attachment") else 0,
+                1 if t.get("npdi_launch_milestone") else 0,
+                ",".join(dep_csv_ids)
             ])
+            
         csv_string = output.getvalue()
         output.close()
         return {"success": True, "csv": csv_string}
     except Exception as e:
         frappe.log_error(f"Error exporting template {template_name}: {str(e)}")
         frappe.throw(_("Failed to export template as CSV"))
+
+@frappe.whitelist()
+def import_template_csv(template_name: str, csv_data: str):
+    """Import an enriched CSV string to create a new Project Template."""
+    try:
+        import base64
+        # If csv_data comes as data URI, extract base64 part
+        if csv_data.startswith("data:"):
+            csv_data = base64.b64decode(csv_data.split(",")[1]).decode("utf-8")
+
+        reader = csv.reader(StringIO(csv_data))
+        header = next(reader, None) # skip header
+        
+        # If template exists, delete it
+        if frappe.db.exists("Project Template", template_name):
+            frappe.delete_doc("Project Template", template_name, ignore_permissions=True, force=True)
+            frappe.db.commit()
+            
+        csv_rows = []
+        for row in reader:
+            if not row or not row[0].strip(): continue
+            csv_rows.append(row)
+            
+        if not csv_rows:
+            return {"success": False, "error": "CSV empty or invalid."}
+            
+        csv_id_to_task_name = {}
+        
+        # Pass 1: Create flat Task objects
+        for row in csv_rows:
+            csv_id = row[0].strip()
+            subject = row[1].strip()
+            task_doc = frappe.new_doc("Task")
+            task_doc.subject = subject
+            task_doc.description = row[2].strip() if len(row) > 2 else ""
+            task_doc.is_group = 1 if len(row) > 3 and str(row[3]).strip() in ["1", "true", "True"] else 0
+            task_doc.is_milestone = 1 if len(row) > 4 and str(row[4]).strip() in ["1", "true", "True"] else 0
+            task_doc.is_template = 1
+            task_doc.insert(ignore_permissions=True)
+            csv_id_to_task_name[csv_id] = task_doc.name
+            
+        # Pass 2: Setup Parent-Child Task relationships
+        for row in csv_rows:
+            csv_id = row[0].strip()
+            parent_id = row[5].strip() if len(row) > 5 else ""
+            if parent_id and parent_id in csv_id_to_task_name:
+                frappe.db.set_value("Task", csv_id_to_task_name[csv_id], "parent_task", csv_id_to_task_name[parent_id])
+                
+        # Pass 3: Build Project Template Task rows
+        pt_rows = []
+        for row in csv_rows:
+            csv_id = row[0].strip()
+            duration = int(float(row[6].strip() or 0)) if len(row) > 6 else 0
+            pt_rows.append({
+                "task": csv_id_to_task_name[csv_id],
+                "subject": row[1].strip(),
+                "duration": duration,
+                "npdi_duration_unit": row[7].strip() if len(row) > 7 else "Day",
+                "npdi_stage_name": row[8].strip() if len(row) > 8 else "",
+                "npdi_module": row[9].strip() if len(row) > 9 else "",
+                "npdi_responsible_role": row[10].strip() if len(row) > 10 else "",
+                "npdi_requires_attachment": 1 if len(row) > 11 and str(row[11]).strip() in ["1", "true", "True"] else 0,
+                "npdi_launch_milestone": 1 if len(row) > 12 and str(row[12]).strip() in ["1", "true", "True"] else 0,
+            })
+            
+        template_doc = frappe.get_doc({
+            "doctype": "Project Template",
+            "name": template_name,
+            "project_template_name": template_name,
+            "project_type": "Internal",
+            "tasks": pt_rows
+        })
+        template_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Pass 4: Rebuild dependencies (npdi_task_dependencies)
+        pt_task_map = {}
+        for t in template_doc.tasks:
+            pt_task_map[t.task] = t.name
+            
+        for row in csv_rows:
+            csv_id = row[0].strip()
+            depends_on_str = row[13].strip() if len(row) > 13 else ""
+            if not depends_on_str: continue
+            
+            parent_task_name = csv_id_to_task_name[csv_id]
+            parent_row_name = pt_task_map.get(parent_task_name)
+            
+            dep_ids = [d.strip() for d in depends_on_str.split(",") if d.strip()]
+            for did in dep_ids:
+                if did in csv_id_to_task_name:
+                    dep_task_name = csv_id_to_task_name[did]
+                    dep_row_name = pt_task_map.get(dep_task_name)
+                    if parent_row_name and dep_row_name:
+                        template_doc.append("npdi_task_dependencies", {
+                            "task": parent_row_name,
+                            "depends_on": dep_row_name
+                        })
+        template_doc.save(ignore_permissions=True)
+        frappe.db.commit()
+            
+        return {"success": True, "name": template_doc.name}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "import_template_csv")
+        return {"success": False, "error": str(e)}
 
 
 

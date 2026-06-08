@@ -15,3 +15,8 @@ dist/
 
 # Dependencias locales (si se compilan assets Node en el futuro)
 node_modules/
+
+# Testing & Reporting Folders
+scratch/
+testing_plans/
+work_reports/

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Files, Settings, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Files, Settings, ChevronRight, PanelLeftClose, PanelLeftOpen, ChevronUp, ChevronDown } from 'lucide-react';
 
 interface NpdiLayoutProps {
   children: React.ReactNode;
@@ -8,6 +8,18 @@ interface NpdiLayoutProps {
 }
 
 const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName }) => {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
+  const [isTopbarCollapsed, setIsTopbarCollapsed] = React.useState(false);
+
+  React.useEffect(() => {
+    const handleFocusMode = (e: any) => {
+      setIsSidebarCollapsed(e.detail);
+      setIsTopbarCollapsed(e.detail);
+    };
+    window.addEventListener('npdi_toggle_focus_mode', handleFocusMode);
+    return () => window.removeEventListener('npdi_toggle_focus_mode', handleFocusMode);
+  }, []);
+
   // Generate breadcrumb trail based on appMode
   const breadcrumbs = (() => {
     switch (appMode) {
@@ -58,8 +70,8 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
     }}>
       {/* Sidebar */}
       <aside style={{
-        width: '250px',
-        minWidth: '250px',
+        width: isSidebarCollapsed ? '60px' : '250px',
+        minWidth: isSidebarCollapsed ? '60px' : '250px',
         backgroundColor: 'var(--bg-surface)',
         borderRight: '1px solid var(--border)',
         display: 'flex',
@@ -67,25 +79,45 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
         padding: '20px 0',
         boxSizing: 'border-box',
         overflowY: 'auto',
+        overflowX: 'hidden',
+        transition: 'width 0.2s ease, min-width 0.2s ease',
       }}>
         <div style={{
-          padding: '0 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: isSidebarCollapsed ? 'center' : 'space-between',
+          padding: isSidebarCollapsed ? '0' : '0 20px',
           marginBottom: '30px',
-          fontSize: '18px',
-          fontWeight: 700,
-          color: 'var(--accent)',
-          letterSpacing: '-0.5px',
         }}>
-          NPDI
+          {!isSidebarCollapsed && (
+            <div style={{
+              fontSize: '18px',
+              fontWeight: 700,
+              color: 'var(--accent)',
+              letterSpacing: '-0.5px',
+            }}>
+              NPDI
+            </div>
+          )}
+          <button 
+            className="btn-icon" 
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            title={isSidebarCollapsed ? "Expandir menú" : "Colapsar menú"}
+            style={{ color: 'var(--text-muted)' }}
+          >
+            {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
         </div>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <button
             onClick={() => handleNavigation('npdi_project_dashboard')}
+            title={isSidebarCollapsed ? "Dashboard" : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: isSidebarCollapsed ? 'center' : 'flex-start',
               gap: '12px',
-              padding: '12px 20px',
+              padding: isSidebarCollapsed ? '12px 0' : '12px 20px',
               background: 'none',
               border: 'none',
               color: 'var(--text-primary)',
@@ -100,15 +132,17 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <LayoutDashboard size={18} />
-            Dashboard
+            {!isSidebarCollapsed && "Dashboard"}
           </button>
           <button
             onClick={() => handleNavigation('npdi_project_dashboard', 'Project Template')}
+            title={isSidebarCollapsed ? "Plantillas" : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: isSidebarCollapsed ? 'center' : 'flex-start',
               gap: '12px',
-              padding: '12px 20px',
+              padding: isSidebarCollapsed ? '12px 0' : '12px 20px',
               background: 'none',
               border: 'none',
               color: 'var(--text-primary)',
@@ -123,15 +157,17 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <Files size={18} />
-            Plantillas
+            {!isSidebarCollapsed && "Plantillas"}
           </button>
           <button
             onClick={() => handleNavigation('npdi-settings')}
+            title={isSidebarCollapsed ? "Configuración" : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: isSidebarCollapsed ? 'center' : 'flex-start',
               gap: '12px',
-              padding: '12px 20px',
+              padding: isSidebarCollapsed ? '12px 0' : '12px 20px',
               background: 'none',
               border: 'none',
               color: 'var(--text-primary)',
@@ -146,7 +182,7 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <Settings size={18} />
-            Configuración
+            {!isSidebarCollapsed && "Configuración"}
           </button>
         </nav>
       </aside>
@@ -160,14 +196,18 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
       }}>
         {/* Top App Bar */}
         <header style={{
-          height: '60px',
-          minHeight: '60px',
+          height: isTopbarCollapsed ? '0px' : '60px',
+          minHeight: isTopbarCollapsed ? '0px' : '60px',
           backgroundColor: 'var(--bg-surface)',
-          borderBottom: '1px solid var(--border)',
+          borderBottom: isTopbarCollapsed ? 'none' : '1px solid var(--border)',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 24px',
+          justifyContent: 'space-between',
+          padding: isTopbarCollapsed ? '0' : '0 24px',
           boxSizing: 'border-box',
+          overflow: 'hidden',
+          transition: 'height 0.2s ease, min-height 0.2s ease, padding 0.2s ease',
+          opacity: isTopbarCollapsed ? 0 : 1,
         }}>
           <div style={{
             display: 'flex',
@@ -186,7 +226,43 @@ const NpdiLayout: React.FC<NpdiLayoutProps> = ({ children, appMode, projectName 
               </React.Fragment>
             ))}
           </div>
+          
+          <button 
+            className="btn-icon" 
+            onClick={() => setIsTopbarCollapsed(true)}
+            title="Colapsar panel superior"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <ChevronUp size={18} />
+          </button>
         </header>
+
+        {/* Floating button to restore top bar when collapsed */}
+        {isTopbarCollapsed && (
+          <button
+            onClick={() => setIsTopbarCollapsed(false)}
+            style={{
+              position: 'absolute',
+              top: '8px',
+              right: '24px',
+              zIndex: 1000,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
+              borderRadius: '50%',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              boxShadow: '0 2px 5px rgba(0,0,0,0.1)',
+            }}
+            title="Expandir panel superior"
+          >
+            <ChevronDown size={16} />
+          </button>
+        )}
 
         {/* Page content */}
         <main style={{

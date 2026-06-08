@@ -11,7 +11,9 @@ import {
   Link as LinkIcon,
   Plus, 
   Trash2,
-  Calendar
+  Calendar,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 
 interface ListViewProps {
@@ -48,6 +50,7 @@ export default function ListView({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set());
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Depth-level expand state per stage: 0 = all collapsed, Infinity = all expanded
   const [stageExpandDepths, setStageExpandDepths] = useState<Record<string, number>>({});
@@ -433,7 +436,37 @@ export default function ListView({
   };
 
   return (
-    <div className="task-list">
+    <div 
+      className="list-container"
+      style={{
+        background: 'var(--bg-surface)', 
+        borderRadius: isFullscreen ? '0' : '12px', 
+        border: isFullscreen ? 'none' : '1px solid var(--border)', 
+        display: 'flex',
+        flexDirection: 'column',
+        ...(isFullscreen ? {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 9999,
+          height: '100vh',
+        } : {})
+      }}
+    >
+      <div className="list-toolbar" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', background: 'var(--bg-surface-2)', alignItems: 'center' }}>
+        <button
+          className="btn btn-ghost"
+          onClick={() => setIsFullscreen(!isFullscreen)}
+          title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+          style={{ fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          {isFullscreen ? "Salir" : "Pantalla Completa"}
+        </button>
+      </div>
+      <div className="task-list" style={{ flex: 1, overflowY: 'auto' }}>
       {groupedTasks && Object.entries(groupedTasks).map(([stageName, tasksInStage]: [string, any]) => {
         const completedCount = tasksInStage.filter((t: any) => t.status === 'Completed').length;
         const totalCount = tasksInStage.length;
@@ -559,6 +592,7 @@ export default function ListView({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

@@ -160,7 +160,7 @@ class CPMEngine:
                 self.float[t] = 0.0
                 self.is_critical[t] = False
 
-        # Persistencia masiva transaccional
+        # Persistencia masiva
         for task_name, doc in self.tasks.items():
             if task_name in self.es and task_name in self.ef:
                 es_val = self.es[task_name]
@@ -344,16 +344,18 @@ class CPMEngine:
                     valid_lss = [self.ls[c] for c in children if c in self.ls]
                     if valid_lfs:
                         self.lf[task_name] = max(valid_lfs)
-                    if valid_lss:
+            if valid_lss:
                         self.ls[task_name] = min(valid_lss)
 
 
 def before_project_insert(doc, method):
+    if doc.flags.bypass_npdi_project_validation: return
     """Gancho disparado antes de insertar un Proyecto para marcar la instanciación masiva."""
     frappe.local.is_instantiating_project = True
 
 
 def task_before_validate(doc, method):
+    if doc.flags.bypass_npdi_project_validation: return
     """Oculta temporalmente la fecha de fin para saltarse la validación estricta de Frappe."""
     if getattr(frappe.local, 'is_instantiating_project', False):
         if doc.parent_task and doc.exp_end_date:
@@ -362,6 +364,7 @@ def task_before_validate(doc, method):
 
 
 def task_before_save(doc, method):
+    if doc.flags.bypass_npdi_project_validation: return
     """Restaura la fecha de fin oculta antes de guardar en la base de datos."""
     if getattr(frappe.local, 'is_instantiating_project', False):
         if hasattr(doc, 'custom_hidden_exp_end_date') and doc.custom_hidden_exp_end_date:
@@ -369,6 +372,7 @@ def task_before_save(doc, method):
 
 
 def on_task_update(doc, method):
+    if doc.flags.bypass_npdi_project_validation: return
     """Gancho disparado al actualizar una tarea para propagar fechas en todo el proyecto."""
     if doc.project:
         # Si estamos en medio de la instanciación de un proyecto desde plantilla, ignoramos esto por completo
@@ -403,6 +407,7 @@ def on_task_update(doc, method):
 
 
 def on_project_insert(doc, method):
+    if doc.flags.bypass_npdi_project_validation: return
     """
     Hook fired when a Project is created from a Project Template.
 

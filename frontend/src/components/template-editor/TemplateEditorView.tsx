@@ -3,7 +3,7 @@ import './TemplateEditor.css';
 import React, { useState, useEffect, useTransition, useRef } from 'react';
 
 
-import { Plus, Layers, ChevronRight, ChevronDown, Clock, X, Loader2, LayoutList, Columns2, Link as LinkIcon, Search, Flag } from 'lucide-react';
+import { Plus, Layers, ChevronRight, ChevronDown, Clock, X, Loader2, LayoutList, Columns2, Link as LinkIcon, Search, Flag, Maximize2, Minimize2 } from 'lucide-react';
 import TaskTemplateRow, { durationToDisplay, durationInputTodays } from './TaskTemplateRow';
 import GanttView from '../../GanttView';
 
@@ -40,6 +40,7 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
   
   const isPending = false; const startTransition = (cb: any) => cb();
   const [activeTab, setActiveTab] = useState<'list' | 'gantt'>('list');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const scheduleMap = React.useMemo(() => calculateTemplateSchedule(allFlatTasks), [allFlatTasks]);
 
@@ -259,8 +260,38 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
       </div>
 
       {activeTab === 'list' ? (
-        Object.keys(groupedTasks).length === 0 ? (
-          <div className="card" style={{ padding: 'var(--space-12)', textAlign: 'center', color: 'var(--text-muted)' }}>
+        <div 
+          className="template-list-container"
+          style={{
+            background: isFullscreen ? 'var(--bg-surface)' : 'transparent',
+            borderRadius: isFullscreen ? '0' : '12px',
+            display: 'flex',
+            flexDirection: 'column',
+            ...(isFullscreen ? {
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 9999,
+              height: '100vh',
+            } : {})
+          }}
+        >
+          <div className="list-toolbar" style={{ padding: '8px 12px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: isFullscreen ? '0' : '12px', borderBottom: isFullscreen ? '1px solid var(--border)' : 'none', background: isFullscreen ? 'var(--bg-surface-2)' : 'transparent' }}>
+            <button
+              className="btn btn-ghost"
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+              style={{ fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              {isFullscreen ? "Salir" : "Pantalla Completa"}
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: isFullscreen ? 'auto' : 'visible', padding: isFullscreen ? '16px' : '0', display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+            {Object.keys(groupedTasks).length === 0 ? (
+              <div className="card" style={{ padding: 'var(--space-12)', textAlign: 'center', color: 'var(--text-muted)' }}>
             <Layers size={48} style={{ margin: '0 auto var(--space-4)', opacity: 0.2 }} />
             <p>Aún no has definido tareas para esta plantilla.</p>
             <button className="btn btn-primary" style={{ marginTop: 'var(--space-4)' }} onClick={openNewStageDialog}>
@@ -425,7 +456,9 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
               <Plus size={16} /> Crear nueva etapa
             </button>
           </>
-        )
+        )}
+          </div>
+        </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <GanttView 

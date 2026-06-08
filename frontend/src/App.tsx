@@ -10,6 +10,7 @@ import NpdiLayout from './components/layout/NpdiLayout'
 import { Calendar, List, ChevronRight } from 'lucide-react'
 import './App.css'
 import { toISODateString } from './dateUtils'
+import { frappeClient } from './api/frappeClient'
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -23,14 +24,13 @@ function App() {
   const [appMode, setAppMode] = useState<'project' | 'template_editor' | 'template_list' | 'project_dashboard' | 'error'>('error');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [showCreationModal, setShowCreationModal] = useState(false);
+  const [erpnextRoles, setErpnextRoles] = useState<any[]>([]);
 
-  const fetchTasks = () => {
+  const fetchTasks = async (signal?: AbortSignal) => {
     let projectName: string | null = null;
     let templateName: string | null = null;
 
-    // @ts-ignore
     if (window.frappe && window.frappe.get_route) {
-      // @ts-ignore
       const route = window.frappe.get_route();
       if (route.length >= 3) {
         if (route[1] === "Project") projectName = route[2];
@@ -39,8 +39,6 @@ function App() {
     }
 
     if (!projectName && !templateName) {
-      // Check if we are specifically on a template list route
-      // @ts-ignore
       const route = window.frappe?.get_route?.();
       if (route && route[1] === "Project Template" && !route[2]) {
         setAppMode('template_list');
@@ -51,7 +49,6 @@ function App() {
         setLoading(false);
         return;
       } else {
-        // Just default to project dashboard for now if nothing else is provided
         setAppMode('project_dashboard');
         setLoading(false);
         return;
@@ -60,45 +57,49 @@ function App() {
 
     if (templateName) {
       setAppMode('template_editor');
-      // @ts-ignore
       if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.get_template_editor_data",
-          args: { template: templateName },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              setTemplateData(r.message.data.template);
-              setTasks(r.message.data.tasks); // Hierarchical tasks
-            } else {
-              setError(r.message?.error || "Error cargando plantilla.");
-            }
-            setLoading(false);
+        try {
+          const res: any = await frappeClient.call(
+            "erpnext_npdi_suite.api.get_template_editor_data",
+            { template: templateName },
+            signal
+          );
+          if (res.success) {
+            setTemplateData(res.data.template);
+            setTasks(res.data.tasks);
+          } else {
+            setError(res.error || "Error cargando plantilla.");
           }
-        });
+        } catch (err: any) {
+          if (err.name !== 'AbortError') setError(err.message || "Error cargando plantilla.");
+        } finally {
+          setLoading(false);
+        }
       } else {
         setLoading(false);
       }
       return;
     }
 
-    // @ts-ignore
     if (window.frappe) {
-      // @ts-ignore
-      frappe.call({
-        method: "erpnext_npdi_suite.api.get_project_gantt_data",
-        args: { project: projectName, template: templateName },
-        callback: function (r: any) {
-          if (r.message && r.message.success) {
-            setAppMode('project');
-            setTasks(r.message.tasks);
-            setProjectMeta(r.message.project_meta || null);
-          } else {
-            setError(r.message?.error || "Error cargando tareas del servidor.");
-          }
-          setLoading(false);
+      try {
+        const res: any = await frappeClient.call(
+          "erpnext_npdi_suite.api.get_project_gantt_data",
+          { project: projectName, template: templateName },
+          signal
+        );
+        if (res.success) {
+          setAppMode('project');
+          setTasks(res.tasks);
+          setProjectMeta(res.project_meta || null);
+        } else {
+          setError(res.error || "Error cargando tareas del servidor.");
         }
-      });
+      } catch (err: any) {
+        if (err.name !== 'AbortError') setError(err.message || "Error cargando tareas del servidor.");
+      } finally {
+        setLoading(false);
+      }
     } else {
       setTimeout(() => {
         setTasks([]);
@@ -107,22 +108,38 @@ function App() {
     }
   };
 
-
   useEffect(() => {
-    fetchTasks();
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const fetchRoles = async () => {
+      // @ts-ignore
+      if (window.frappe) {
+        try {
+          // @ts-ignore
+          const res = await window.frappe.call('erpnext_npdi_suite.api.get_erpnext_roles');
+          if (res.message && res.message.success) {
+            setErpnextRoles(res.message.data || []);
+          }
+        } catch (e) {
+          console.error("Failed to fetch roles", e);
+        }
+      }
+    };
+
+    fetchTasks(signal);
+    fetchRoles();
 
     const handleRouteChange = () => {
-      // Small timeout to allow Frappe routing to settle
       setTimeout(() => {
         setLoading(true);
-        fetchTasks();
+        fetchTasks(signal);
       }, 50);
     };
 
     window.addEventListener('npdi_route_changed', handleRouteChange);
     window.addEventListener('popstate', handleRouteChange);
 
-    // Lógica para detectar y observar el tema activo de ERPNext / Frappe
     const checkTheme = () => {
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         document.documentElement.getAttribute('data-color-scheme') === 'dark' ||
@@ -138,6 +155,7 @@ function App() {
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
     return () => {
+      controller.abort();
       observer.disconnect();
       window.removeEventListener('npdi_route_changed', handleRouteChange);
       window.removeEventListener('popstate', handleRouteChange);
@@ -152,93 +170,79 @@ function App() {
   };
 
   const handleStatusChange = async (taskId: string, status: string) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.update_task_status",
-          args: { task_id: taskId, status: status },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            }
-            resolve(r.message || { success: false });
-          }
-        });
-      } else {
-        resolve({ success: true });
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.update_task_status", { task_id: taskId, status: status });
+        if (res.success) {
+          await fetchTasks();
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      return { success: true };
+    }
   };
 
   const handleDateChange = async (taskId: string, start: Date, end: Date) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.update_task_dates",
-          args: { task_id: taskId, start: toISODateString(start), end: toISODateString(end) },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            } else {
-              fetchTasks();
-            }
-            resolve(r.message || { success: false });
-          }
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.update_task_dates", {
+          task_id: taskId,
+          start: toISODateString(start),
+          end: toISODateString(end)
         });
-      } else {
-        resolve({ success: true });
+        if (res.success) {
+          await fetchTasks();
+        } else {
+          await fetchTasks();
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      return { success: true };
+    }
   };
 
   const handleUpdateTask = async (taskId: string, data: any) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.update_project_task",
-          args: { task_id: taskId, task_data: data },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            } else {
-              alert(r.message?.error || "Error al actualizar la tarea.");
-            }
-            resolve(r.message || { success: false });
-          }
-        });
-      } else {
-        resolve({ success: true });
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.update_project_task", { task_id: taskId, task_data: data });
+        if (res.success) {
+          await fetchTasks();
+        } else {
+          alert(res.error || "Error al actualizar la tarea.");
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      return { success: true };
+    }
   };
 
   const handleRecalculateCpm = async () => {
     const proj = new URLSearchParams(window.location.search).get('project') || window.frappe?.get_route()[2];
     if (!proj) return;
     setLoading(true);
-    // @ts-ignore
     if (window.frappe) {
-      // @ts-ignore
-      frappe.call({
-        method: "erpnext_npdi_suite.api.recalculate_cpm",
-        args: { project: proj },
-        callback: function (r: any) {
-          if (r.message && r.message.success) {
-            // @ts-ignore
-            frappe.show_alert({ message: r.message.message || "Ruta crítica recalculada.", indicator: "green" });
-            fetchTasks();
-          } else {
-            alert(r.message?.error || "Error al recalcular la ruta crítica.");
-            setLoading(false);
-          }
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.recalculate_cpm", { project: proj });
+        if (res.success) {
+          window.frappe.show_alert({ message: res.message || "Ruta crítica recalculada.", indicator: "green" });
+          fetchTasks();
+        } else {
+          alert(res.error || "Error al recalcular la ruta crítica.");
+          setLoading(false);
         }
-      });
+      } catch (err: any) {
+        alert(err.message || "Error al recalcular la ruta crítica.");
+        setLoading(false);
+      }
     } else {
       setTimeout(() => setLoading(false), 500);
     }
@@ -253,10 +257,8 @@ function App() {
       npdiModule?: string;
     }
   ) => {
-    // @ts-ignore
     if (window.frappe) {
       if (inheritedData) {
-        // @ts-ignore
         window.npdi_subtask_inheritance = {
           startDate: inheritedData.startDate,
           dependencies: inheritedData.dependencies
@@ -273,129 +275,116 @@ function App() {
         docAttrs.npdi_module = inheritedData.npdiModule;
       }
 
-      // @ts-ignore
-      frappe.new_doc('Task', docAttrs);
+      window.frappe.new_doc('Task', docAttrs);
     }
   };
+
   const handleDeleteTask = async (taskId: string) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.delete_task",
-          args: { task_id: taskId },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            } else {
-              alert(r.message?.error || "Error al eliminar la tarea.");
-            }
-            resolve(r.message || { success: false });
-          }
-        });
-      } else {
-        // Mock fallback
-        setTasks(prev => prev.filter(t => t.id !== taskId));
-        resolve({ success: true });
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.delete_task", { task_id: taskId });
+        if (res.success) {
+          fetchTasks();
+        } else {
+          alert(res.error || "Error al eliminar la tarea.");
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+      return { success: true };
+    }
   };
 
   const handleAddTaskDependency = async (taskId: string, dependsOnId: string) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.add_task_dependency",
-          args: { task_id: taskId, depends_on: dependsOnId },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            } else {
-              alert(r.message?.error || "Error al agregar dependencia.");
-            }
-            resolve(r.message || { success: false });
-          }
-        });
-      } else {
-        // Mock fallback
-        setTasks(prev => prev.map(t => {
-          if (t.id === taskId) {
-            const deps = t.dependencies ? [...t.dependencies] : [];
-            deps.push({ dependentOnId: dependsOnId });
-            return { ...t, dependencies: deps };
-          }
-          return t;
-        }));
-        resolve({ success: true });
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.add_task_dependency", { task_id: taskId, depends_on: dependsOnId });
+        if (res.success) {
+          fetchTasks();
+        } else {
+          alert(res.error || "Error al agregar dependencia.");
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      setTasks(prev => prev.map(t => {
+        if (t.id === taskId) {
+          const deps = t.dependencies ? [...t.dependencies] : [];
+          deps.push({ dependentOnId: dependsOnId });
+          return { ...t, dependencies: deps };
+        }
+        return t;
+      }));
+      return { success: true };
+    }
   };
 
   const handleSkipTask = async (taskId: string, isSkip: boolean) => {
-    return new Promise((resolve) => {
-      // @ts-ignore
-      if (window.frappe) {
-        // @ts-ignore
-        frappe.call({
-          method: "erpnext_npdi_suite.api.update_task_status",
-          args: { task_id: taskId, status: isSkip ? 'Cancelled' : 'Open' },
-          callback: function (r: any) {
-            if (r.message && r.message.success) {
-              fetchTasks();
-            } else {
-              alert(r.message?.error || "Error al actualizar la tarea.");
-            }
-            resolve(r.message || { success: false });
-          }
+    if (window.frappe) {
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.update_task_status", {
+          task_id: taskId,
+          status: isSkip ? 'Cancelled' : 'Open'
         });
-      } else {
-        setTasks(prev => prev.map(t => {
-          if (t.id === taskId) {
-            return { ...t, isSkipped: isSkip, status: isSkip ? 'Cancelled' : 'Open' };
-          }
-          return t;
-        }));
-        resolve({ success: true });
+        if (res.success) {
+          fetchTasks();
+        } else {
+          alert(res.error || "Error al actualizar la tarea.");
+        }
+        return res;
+      } catch (err: any) {
+        return { success: false, error: err.message };
       }
-    });
+    } else {
+      setTasks(prev => prev.map(t => {
+        if (t.id === taskId) {
+          return { ...t, isSkipped: isSkip, status: isSkip ? 'Cancelled' : 'Open' };
+        }
+        return t;
+      }));
+      return { success: true };
+    }
   };
 
   const handleCaptureBaseline = async () => {
     if (!projectMeta || !projectMeta.name) return;
     setLoading(true);
-    // @ts-ignore
     if (window.frappe) {
-      // @ts-ignore
-      frappe.call({
-        method: "erpnext_npdi_suite.api.capture_project_baseline",
-        args: { project_name: projectMeta.name },
-        callback: function (r: any) {
-          if (r.message && r.message.success) {
-            // @ts-ignore
-            frappe.show_alert({ message: r.message.message || "Línea base capturada.", indicator: "green" });
-            fetchTasks();
-          } else {
-            alert(r.message?.error || "Error al capturar línea base.");
-            setLoading(false);
-          }
+      try {
+        const res: any = await frappeClient.call("erpnext_npdi_suite.api.capture_project_baseline", { project_name: projectMeta.name });
+        if (res.success) {
+          window.frappe.show_alert({ message: res.message || "Línea base capturada.", indicator: "green" });
+          fetchTasks();
+        } else {
+          alert(res.error || "Error al capturar línea base.");
+          setLoading(false);
         }
-      });
+      } catch (err: any) {
+        alert(err.message || "Error al capturar línea base.");
+        setLoading(false);
+      }
     } else {
       setProjectMeta((prev: any) => prev ? { ...prev, npdi_baseline_locked: 1 } : null);
       setLoading(false);
     }
   };
 
-  
   if (appMode === 'template_list') {
     return (
       <NpdiLayout appMode={appMode}>
         <TemplateListPage onEditTemplate={(name) => {
-          // Temporarily navigate to the template
-          window.location.href = `/app/project-template/${name}`;
+          // @ts-ignore
+          if (window.frappe && window.frappe.set_route) {
+            // @ts-ignore
+            window.frappe.set_route('npdi_project_dashboard', 'Project Template', name).then(() => window.dispatchEvent(new Event('npdi_route_changed')));
+          } else {
+            window.location.href = `/app/npdi_project_dashboard/Project Template/${name}`;
+          }
         }} />
       </NpdiLayout>
     );
@@ -406,8 +395,15 @@ function App() {
       <NpdiLayout appMode={appMode}>
         <ProjectsDashboard
           onOpenProject={(name) => {
-            window.location.href = `/app/project/${name}`;
+            // @ts-ignore
+            if (window.frappe && window.frappe.set_route) {
+              // @ts-ignore
+              window.frappe.set_route('npdi_project_dashboard', 'Project', name).then(() => window.dispatchEvent(new Event('npdi_route_changed')));
+            } else {
+              window.location.href = `/app/npdi_project_dashboard/Project/${name}`;
+            }
           }}
+          onOpenTask={handleTaskClick}
           onCreateProject={() => setShowCreationModal(true)}
         />
         <ProjectCreationModal
@@ -415,15 +411,28 @@ function App() {
           onClose={() => setShowCreationModal(false)}
           onProjectCreated={(projectName) => {
             setShowCreationModal(false);
-            window.location.href = `/app/project/${projectName}`;
+            // @ts-ignore
+            if (window.frappe && window.frappe.set_route) {
+              // @ts-ignore
+              window.frappe.set_route('npdi_project_dashboard', 'Project', projectName).then(() => window.dispatchEvent(new Event('npdi_route_changed')));
+            } else {
+              window.location.href = `/app/npdi_project_dashboard/Project/${projectName}`;
+            }
           }}
         />
+        {selectedTaskId && (
+          <TaskDetailDrawer
+            taskId={selectedTaskId}
+            onClose={() => setSelectedTaskId(null)}
+            onRefresh={() => window.dispatchEvent(new Event('npdi_dashboard_refresh'))}
+          />
+        )}
       </NpdiLayout>
     );
   }
 
   if (appMode === 'template_editor' && templateData) {
-    const roles = ["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => ({name: r, id: r}));
+    const roles = erpnextRoles.length > 0 ? erpnextRoles : ["CEO", "Marketing", "I+D", "Calidad", "Supply Chain", "Finanzas", "Producción"].map(r => ({name: r, id: r}));
     return (
       <NpdiLayout appMode={appMode} projectName={templateData.project_template_name}>
         <TemplateEditorView template={{ ...templateData, tasks: tasks }} allRoles={roles} onRefresh={fetchTasks} />
@@ -434,12 +443,24 @@ function App() {
   return (
     <NpdiLayout appMode={appMode} projectName={projectMeta?.name}>
       <div className={`theme-${theme}`} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-
-        {/* Header and Switcher Section */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
           <div>
-            <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 8px 0' }}>
-              {projectMeta?.name || 'NPDI Project Timeline'}
+            <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {projectMeta?.name ? (
+                <a 
+                  href={`/app/project/${projectMeta.name}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--text-primary)', textDecoration: 'none' }}
+                  onMouseOver={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                  onMouseOut={(e) => e.currentTarget.style.textDecoration = 'none'}
+                  title="Abrir documento del proyecto en ERPNext"
+                >
+                  {projectMeta.name}
+                </a>
+              ) : (
+                <span style={{ color: 'var(--text-primary)' }}>NPDI Project Timeline</span>
+              )}
             </h1>
             {projectMeta && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
@@ -452,7 +473,6 @@ function App() {
           </div>
 
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-            {/* Recalculate Button */}
             <button
               onClick={handleRecalculateCpm}
               disabled={loading}
@@ -473,7 +493,6 @@ function App() {
               {loading ? 'Calculando...' : 'Recalcular Ruta Crítica'}
             </button>
 
-            {/* Premium View Switcher Button Group */}
             <div style={{
               display: 'flex',
               background: 'var(--bg-surface-2)',
