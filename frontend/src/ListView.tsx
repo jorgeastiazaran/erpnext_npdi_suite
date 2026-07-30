@@ -207,8 +207,15 @@ export default function ListView({
 
   const renderTask = (task: any, depth = 0, children: any[] = []) => {
     // Basic properties mapping
-    const isCritical = task.npdi_cpm_is_critical;
-    const slack = task.npdi_cpm_slack || 0;
+    const isCritical = Boolean(
+      task.isCritical ||
+      task.npdi_cpm_is_critical === 1 ||
+      task.npdi_cpm_is_critical === true ||
+      (typeof task.slack === 'number' && Math.abs(task.slack) <= 0.01) ||
+      (typeof task.npdi_cpm_total_float === 'number' && Math.abs(task.npdi_cpm_total_float) <= 0.01)
+    );
+    const slack = task.slack || task.npdi_cpm_total_float || 0;
+
     
     const now = new Date();
     now.setHours(0,0,0,0);

@@ -110,21 +110,70 @@ def run():
 
     frappe.logger().info(f"Parsed {len(task_order)} tasks from CSV.")
 
-    # ── Delete existing template if present ───────────────────────────────
+    # ── Delete existing template & template tasks upfront ─────────────────
     if frappe.db.exists("Project Template", TEMPLATE_NAME):
         frappe.logger().info(f"Deleting existing template: {TEMPLATE_NAME}")
         frappe.delete_doc("Project Template", TEMPLATE_NAME,
                           ignore_permissions=True, force=True)
         frappe.db.commit()
 
-    # ── Build Project Template Task rows ──────────────────────────────────
-    # Map CSV task IDs → sequential position (1-based idx in template)
-    id_to_position = {tid: (i + 1) for i, tid in enumerate(task_order)}
+    old_template_tasks = frappe.get_all("Task", filters={"is_template": 1}, fields=["name"])
+    for ot in old_template_tasks:
+        frappe.delete_doc("Task", ot.name, ignore_permissions=True, force=True)
+    frappe.db.commit()
 
+    # ── Create Template Task master records ───────────────────────────────
+    id_to_task_doc = {}
+    for task_id in task_order:
+        t = tasks_by_id[task_id]
+
+        task_doc = frappe.get_doc({
+            "doctype": "Task",
+            "subject": t["subject"],
+            "is_template": 1,
+            "is_group": t["is_group"],
+            "duration": t["duration"],
+            "is_milestone": t["is_milestone"],
+            "npdi_stage_name": t["npdi_stage_name"],
+            "npdi_module": t["npdi_module"] or "Core",
+            "npdi_responsible_role": t["npdi_responsible_role"],
+            "npdi_requires_attachment": t["npdi_requires_attachment"],
+            "npdi_launch_milestone": t["npdi_launch_milestone"],
+        })
+        task_doc.insert(ignore_permissions=True)
+        id_to_task_doc[task_id] = task_doc
+
+
+    # Wire parent_task and dependencies on template Task documents
+    dep_edges = 0
+    for task_id in task_order:
+        t = tasks_by_id[task_id]
+        task_doc = id_to_task_doc[task_id]
+        changed = False
+
+        if t.get("parent_task_id") and t["parent_task_id"] in id_to_task_doc:
+            task_doc.parent_task = id_to_task_doc[t["parent_task_id"]].name
+            changed = True
+
+        for dep_id in t["depends_on"]:
+            dep_doc = id_to_task_doc.get(dep_id)
+            if dep_doc:
+                task_doc.append("depends_on", {"task": dep_doc.name})
+                changed = True
+                dep_edges += 1
+
+        if changed:
+            task_doc.save(ignore_permissions=True)
+
+    frappe.db.commit()
+
+    # ── Build Project Template Task rows ──────────────────────────────────
     template_task_rows = []
     for task_id in task_order:
         t = tasks_by_id[task_id]
+        task_doc = id_to_task_doc[task_id]
         row_data = {
+            "task":             task_doc.name,
             "subject":          t["subject"],
             "duration":         t["duration"],
             "is_group":         t["is_group"],
@@ -136,19 +185,9 @@ def run():
             "npdi_requires_attachment": t["npdi_requires_attachment"],
             "npdi_launch_milestone":    t["npdi_launch_milestone"],
         }
-
-        # Wire dependency rows using Task Template Depends On child table
-        # (only if the doctype exists in this ERPNext version)
-        dep_rows = []
-        if frappe.db.exists("DocType", "Task Template Depends On"):
-            for dep_id in t["depends_on"]:
-                if dep_id in id_to_position:
-                    dep_rows.append({"task": dep_id})  # populated after template save
-
-        if dep_rows:
-            row_data["depends_on"] = dep_rows
-
         template_task_rows.append(row_data)
+
+
 
     # ── Create Project Template document ──────────────────────────────────
     template_doc = frappe.get_doc({
@@ -162,67 +201,8 @@ def run():
     frappe.db.commit()
     frappe.logger().info(f"Created Project Template: {TEMPLATE_NAME} with {len(template_task_rows)} tasks.")
 
-    # ── Wire Task Template Depends On rows using actual row names ─────────
-    # After insert, each Project Template Task row has a real `name` (UUID).
-    # We re-read them and build the id→row_name map, then set depends_on.task.
-    if not frappe.db.exists("DocType", "Task Template Depends On"):
-        frappe.logger().info("Task Template Depends On doctype not found — skipping dependency wiring.")
-        frappe.logger().info("Template created successfully (without dependency rows).")
-        return
-
-    # Load inserted rows in order
-    inserted_rows = frappe.get_all(
-        "Project Template Task",
-        filters={"parent": TEMPLATE_NAME},
-        fields=["name", "subject", "idx"],
-        order_by="idx asc"
-    )
-    # Map position (1-based idx) → inserted row name
-    position_to_row_name = {r.idx: r.name for r in inserted_rows}
-    # Map CSV task ID → inserted row name (by matching position)
-    id_to_row_name = {}
-    for task_id, position in id_to_position.items():
-        row_name = position_to_row_name.get(position)
-        if row_name:
-            id_to_row_name[task_id] = row_name
-
-    # Now insert Task Template Depends On child rows
-    dep_rows_created = 0
-    for task_id in task_order:
-        t = tasks_by_id[task_id]
-        parent_row_name = id_to_row_name.get(task_id)
-        if not parent_row_name:
-            continue
-
-        for dep_id in t["depends_on"]:
-            dep_row_name = id_to_row_name.get(dep_id)
-            if not dep_row_name:
-                frappe.logger().warning(
-                    f"Dependency {dep_id} for task {task_id} not found in template — skipping."
-                )
-                continue
-
-            try:
-                dep_doc = frappe.get_doc({
-                    "doctype": "Task Template Depends On",
-                    "parenttype": "Project Template Task",
-                    "parentfield": "depends_on",
-                    "parent": parent_row_name,
-                    "task": dep_row_name,
-                })
-                dep_doc.insert(ignore_permissions=True)
-                dep_rows_created += 1
-            except Exception as e:
-                frappe.logger().warning(
-                    f"Could not create dependency row {task_id} → {dep_id}: {e}"
-                )
-
-    frappe.db.commit()
-    frappe.logger().info(
-        f"Template build complete. {len(template_task_rows)} tasks, "
-        f"{dep_rows_created} dependency rows created."
-    )
     frappe.msgprint(
         f"✅ NPDI Core Template created: {len(template_task_rows)} tasks, "
-        f"{dep_rows_created} dependency edges wired."
+        f"{dep_edges} dependency edges wired."
     )
+

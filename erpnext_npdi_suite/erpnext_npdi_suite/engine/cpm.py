@@ -110,55 +110,23 @@ class CPMEngine:
         # Resolver los estatus de los grupos basándose en sus hijos
         self.resolve_group_statuses()
 
-        # Nodos iniciales (sin predecesores)
-        start_tasks = [t for t in self.tasks if not self.predecessors.get(t)]
+        # Pasada hacia adelante iterativa (ES / EF)
+        self._run_forward_pass()
 
-        # Pasada hacia adelante (ES / EF)
-        for task_name in start_tasks:
-            self._forward_pass(task_name)
-
-        # Pasada hacia atrás (LS / LF)
-        # Un nodo es verdaderamente terminal si ni él ni ninguno de sus padres tiene sucesores.
-        def has_any_successor(task_name):
-            if self.successors.get(task_name):
-                return True
-            parent = self.tasks[task_name].get("parent_task")
-            if parent and has_any_successor(parent):
-                return True
-            return False
-
-        end_tasks = [t for t in self.tasks if not has_any_successor(t)]
-        if not end_tasks:
-            end_tasks = list(self.tasks.keys()) # Respaldo para redes circulares
-
-        max_ef = max([self.ef[t] for t in self.tasks if t in self.ef] or [now_datetime()])
-        self.project_end = max_ef
-        for t in end_tasks:
-            if t in self.ef:
-                self.lf[t] = max_ef
-                self.ls[t] = add_to_date(max_ef, hours=-self._duration_hours(t))
-
-        # El hito de lanzamiento siempre dicta su propia ruta crítica hacia atrás
-        # Aseguramos que su LF sea exactamente su EF, para que tenga holgura 0.
-        launch_milestone_task = None
-        for t_name, doc in self.tasks.items():
-            if int(doc.get("npdi_launch_milestone") or 0):
-                launch_milestone_task = t_name
-                if t_name in self.ef:
-                    self.lf[t_name] = self.ef[t_name]
-                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
-                break
-
-        self._backward_pass(end_tasks)
+        # Pasada hacia atrás iterativa (LS / LF)
+        self._run_backward_pass()
 
         # Cálculo de holgura y ruta crítica
         for t in self.tasks:
             if t in self.ls and t in self.es:
-                self.float[t] = (self.ls[t] - self.es[t]).total_seconds() / (3600.0 * 24.0)
-                self.is_critical[t] = self.float[t] <= 0.0
+                float_days = (self.ls[t] - self.es[t]).total_seconds() / (3600.0 * 24.0)
+                self.float[t] = round(float_days, 2)
+                self.is_critical[t] = self.float[t] <= 0.01
             else:
                 self.float[t] = 0.0
                 self.is_critical[t] = False
+
+
 
         # Persistencia masiva
         for task_name, doc in self.tasks.items():
@@ -195,7 +163,9 @@ class CPMEngine:
                 if (doc.get("is_milestone") == 1 or 
                     doc.get("npdi_launch_milestone") == 1 or 
                     "stage-gate" in subject):
-                    milestone_dates.append(self.ef[task_name].date())
+                    ef_val = self.ef[task_name]
+                    m_date = ef_val.date() if hasattr(ef_val, "date") else get_datetime(ef_val).date()
+                    milestone_dates.append(m_date)
 
         if milestone_dates:
             latest_milestone_date = max(milestone_dates)
@@ -203,8 +173,10 @@ class CPMEngine:
         else:
             # Fallback: if no milestones exist, the project ends when the absolute last task finishes
             if self.ef:
-                absolute_latest_date = max(self.ef.values()).date()
+                ef_dates = [v.date() if hasattr(v, "date") else get_datetime(v).date() for v in self.ef.values()]
+                absolute_latest_date = max(ef_dates)
                 frappe.db.set_value("Project", self.project_name, "expected_end_date", absolute_latest_date)
+
 
     def _duration_hours(self, task_name):
         doc = self.tasks[task_name]
@@ -215,137 +187,150 @@ class CPMEngine:
         else:
             return 24.0 # 1 día por defecto
 
-    def _forward_pass(self, task_name):
-        if task_name in self.es:
-            return
+    def _get_effective_predecessors(self, task_name):
+        """Devuelve los predecesores directos y los predecesores de todos los grupos ancestros."""
+        effective = set(self.predecessors.get(task_name, []))
+        curr = self.tasks[task_name].get("parent_task")
+        visited = {task_name}
+        while curr and curr in self.tasks and curr not in visited:
+            visited.add(curr)
+            for p in self.predecessors.get(curr, []):
+                if p not in visited and p != task_name:
+                    effective.add(p)
+            curr = self.tasks[curr].get("parent_task")
+        return list(effective)
 
-        doc = self.tasks[task_name]
-        
-        # Si la tarea está Completada, fijar sus fechas al estado actual guardado
-        # Esto evita inconsistencias si se reabre un predecesor
-        if doc.get("status") == "Completed":
-            self.es[task_name] = get_datetime(doc.exp_start_date or now_datetime())
-            self.ef[task_name] = get_datetime(doc.completed_on or doc.exp_end_date or now_datetime())
-            for succ in self.successors.get(task_name, []):
-                self._forward_pass(succ)
-            return
-        
-        # Rollup para tareas padre
-        if doc.get("is_group"):
-            children = self.children.get(task_name, [])
-            if children:
-                for child in children:
-                    self._forward_pass(child)
-                valid_es = [self.es[c] for c in children if c in self.es]
-                valid_ef = [self.ef[c] for c in children if c in self.ef]
-                self.es[task_name] = min(valid_es) if valid_es else now_datetime()
-                self.ef[task_name] = max(valid_ef) if valid_ef else self.es[task_name]
+    def _get_effective_successors(self, task_name):
+        """Devuelve los sucesores directos y los sucesores de todos los grupos ancestros."""
+        effective = set(self.successors.get(task_name, []))
+        curr = self.tasks[task_name].get("parent_task")
+        visited = {task_name}
+        while curr and curr in self.tasks and curr not in visited:
+            visited.add(curr)
+            for s in self.successors.get(curr, []):
+                if s not in visited and s != task_name:
+                    effective.add(s)
+            curr = self.tasks[curr].get("parent_task")
+        return list(effective)
+
+    def _run_forward_pass(self):
+        project_doc = frappe.get_doc("Project", self.project_name)
+        project_start = get_datetime(project_doc.expected_start_date or now_datetime())
+
+        # Initialize base values for all tasks
+        for t, doc in self.tasks.items():
+            if doc.get("status") == "Completed":
+                self.es[t] = get_datetime(doc.exp_start_date or project_start)
+                self.ef[t] = get_datetime(doc.completed_on or doc.exp_end_date or project_start)
+            elif doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start"):
+                self.es[t] = get_datetime(doc.npdi_manual_start)
+                duration = self._duration_hours(t)
+                self.ef[t] = add_to_date(self.es[t], hours=duration)
             else:
-                self.es[task_name] = get_datetime(frappe.get_doc("Project", self.project_name).expected_start_date or now_datetime())
-                self.ef[task_name] = self.es[task_name]
-                
-            for succ in self.successors.get(task_name, []):
-                self._forward_pass(succ)
-            return
+                self.es[t] = project_start
+                duration = self._duration_hours(t)
+                self.ef[t] = add_to_date(project_start, hours=duration)
 
-        if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start"):
-            self.es[task_name] = get_datetime(doc.npdi_manual_start)
-        else:
-            preds = self.predecessors.get(task_name, [])
-            if not preds:
-                project_doc = frappe.get_doc("Project", self.project_name)
-                start_base = project_doc.expected_start_date or now_datetime()
-                self.es[task_name] = get_datetime(start_base)
-            else:
-                for p in preds:
-                    self._forward_pass(p)
-                valid_efs = [self.ef[p] for p in preds if p in self.ef]
-                self.es[task_name] = max(valid_efs) if valid_efs else now_datetime()
-
-        if doc.get("status") == "Completed" and doc.get("completed_on"):
-            self.ef[task_name] = get_datetime(doc.completed_on)
-        else:
-            duration = self._duration_hours(task_name)
-            self.ef[task_name] = add_to_date(self.es[task_name], hours=duration)
-
-        for succ in self.successors.get(task_name, []):
-            self._forward_pass(succ)
-
-    def _backward_pass(self, end_tasks):
-        # Inicializar todos los nodos
-        for t in self.tasks:
-            self.lf[t] = self.project_end
-            self.ls[t] = add_to_date(self.project_end, hours=-self._duration_hours(t))
-            
-        # El hito de lanzamiento se clava en su EF
-        for t_name, doc in self.tasks.items():
-            if int(doc.get("npdi_launch_milestone") or 0):
-                if t_name in self.ef:
-                    self.lf[t_name] = self.ef[t_name]
-                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
-            elif doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_end"):
-                manual_lf = get_datetime(doc.npdi_manual_end)
-                if manual_lf < self.lf[t_name]:
-                    self.lf[t_name] = manual_lf
-                    self.ls[t_name] = add_to_date(self.lf[t_name], hours=-self._duration_hours(t_name))
-
-        # Relajación iterativa (Bellman-Ford adaptado para CPM)
-        # Esto asegura que sin importar el orden topológico, las restricciones se propagan correctamente
+        # Iterative relaxation (Bellman-Ford variant for forward pass)
         changed = True
         iterations = 0
-        max_iterations = len(self.tasks) + 10
-        
+        max_iterations = len(self.tasks) * 2 + 10
+
         while changed and iterations < max_iterations:
             changed = False
             iterations += 1
-            
-            for task_name, doc in self.tasks.items():
-                old_lf = self.lf[task_name]
-                new_lf = old_lf
-                
-                # 1. Restricción por sucesores directos
-                successors = self.successors.get(task_name, [])
-                if successors:
-                    valid_lss = [self.ls[s] for s in successors if s in self.ls]
-                    if valid_lss:
-                        min_succ_ls = min(valid_lss)
-                        if min_succ_ls < new_lf:
-                            new_lf = min_succ_ls
-                            
-                # 2. Restricción por ser hijo de un grupo (hereda el LF del padre)
-                parent_task = doc.get("parent_task")
-                if parent_task and parent_task in self.lf:
-                    if self.lf[parent_task] < new_lf:
-                        new_lf = self.lf[parent_task]
-                        
-                # 3. Restricción por ser padre de hijos (el padre debe terminar cuando menos cuando el último hijo termine)
-                # OJO: En la pasada hacia atrás, el padre DEBE darles espacio a sus hijos, así que su LF empuja el de los hijos (punto 2).
-                # Pero si los hijos están empujados por otra cosa, el LF del padre no debe cambiar a menos que sea forzado por SUS propios sucesores.
-                # Por lo tanto, el LF del padre es determinado por sus sucesores (Punto 1).
-                # Sin embargo, para mantener coherencia, el LF real del grupo se recalculará al final basado en sus hijos.
-                
-                # Proteger el hito de lanzamiento
-                if int(doc.get("npdi_launch_milestone") or 0):
-                    if task_name in self.ef and new_lf < self.ef[task_name]:
-                        new_lf = self.ef[task_name]
-                        
-                if new_lf < old_lf:
-                    self.lf[task_name] = new_lf
-                    self.ls[task_name] = add_to_date(new_lf, hours=-self._duration_hours(task_name))
+
+            for t, doc in self.tasks.items():
+                if doc.get("status") == "Completed":
+                    continue
+                if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start"):
+                    continue
+
+                eff_preds = self._get_effective_predecessors(t)
+                pred_efs = [self.ef[p] for p in eff_preds if p in self.ef]
+                max_pred_ef = max(pred_efs) if pred_efs else project_start
+
+                if doc.get("is_group"):
+                    children = self.children.get(t, [])
+                    if children:
+                        min_child_es = min([self.es[c] for c in children if c in self.es])
+                        max_child_ef = max([self.ef[c] for c in children if c in self.ef])
+                        new_es = max(max_pred_ef, min_child_es) if max_pred_ef else min_child_es
+                        new_ef = max(max_pred_ef, max_child_ef) if max_pred_ef else max_child_ef
+                    else:
+                        new_es = max_pred_ef
+                        new_ef = max_pred_ef
+                else:
+                    new_es = max_pred_ef
+                    duration = self._duration_hours(t)
+                    new_ef = add_to_date(new_es, hours=duration)
+
+                if self.es.get(t) != new_es or self.ef.get(t) != new_ef:
+                    self.es[t] = new_es
+                    self.ef[t] = new_ef
                     changed = True
-                    
-        # Pasada final para ajustar Grupos (Padres)
-        # El LF de un grupo es formalmente el máximo LF de sus hijos (siempre que respete su límite)
-        for task_name, doc in self.tasks.items():
-            if doc.get("is_group"):
-                children = self.children.get(task_name, [])
-                if children:
-                    valid_lfs = [self.lf[c] for c in children if c in self.lf]
-                    valid_lss = [self.ls[c] for c in children if c in self.ls]
-                    if valid_lfs:
-                        self.lf[task_name] = max(valid_lfs)
-            if valid_lss:
-                        self.ls[task_name] = min(valid_lss)
+
+    def _run_backward_pass(self):
+
+        project_start = get_datetime(frappe.get_doc("Project", self.project_name).expected_start_date or now_datetime())
+        project_end = max([self.ef[t] for t in self.tasks if t in self.ef] or [project_start])
+        self.project_end = project_end
+
+        # Initialize base LF and LS for all tasks
+        for t, doc in self.tasks.items():
+            if doc.get("status") == "Completed":
+                self.lf[t] = get_datetime(doc.completed_on or doc.exp_end_date or project_end)
+                self.ls[t] = get_datetime(doc.exp_start_date or project_end)
+            elif doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_end"):
+                self.lf[t] = get_datetime(doc.npdi_manual_end)
+                duration = self._duration_hours(t)
+                self.ls[t] = add_to_date(self.lf[t], hours=-duration)
+            else:
+                self.lf[t] = project_end
+                duration = self._duration_hours(t)
+                self.ls[t] = add_to_date(project_end, hours=-duration)
+
+        # Iterative relaxation for backward pass
+        changed = True
+        iterations = 0
+        max_iterations = len(self.tasks) * 2 + 10
+
+        while changed and iterations < max_iterations:
+            changed = False
+            iterations += 1
+
+            for t, doc in self.tasks.items():
+                if doc.get("status") == "Completed":
+                    continue
+
+                eff_succs = self._get_effective_successors(t)
+                valid_succ_lss = [self.ls[s] for s in eff_succs if s in self.ls]
+                parent = self.tasks[t].get("parent_task")
+                if parent and parent in self.lf:
+                    valid_succ_lss.append(self.lf[parent])
+                target_lf = min(valid_succ_lss) if valid_succ_lss else project_end
+
+
+                if doc.get("is_group"):
+                    children = self.children.get(t, [])
+                    if children:
+                        max_child_lf = max([self.lf[c] for c in children if c in self.lf])
+                        min_child_ls = min([self.ls[c] for c in children if c in self.ls])
+                        new_lf = min(target_lf, max_child_lf) if target_lf else max_child_lf
+                        new_ls = min(target_lf, min_child_ls) if target_lf else min_child_ls
+                    else:
+                        new_lf = target_lf
+                        new_ls = target_lf
+                else:
+                    new_lf = target_lf
+                    duration = self._duration_hours(t)
+                    new_ls = add_to_date(new_lf, hours=-duration)
+
+                if self.lf.get(t) != new_lf or self.ls.get(t) != new_ls:
+                    self.lf[t] = new_lf
+                    self.ls[t] = new_ls
+                    changed = True
+
 
 
 def before_project_insert(doc, method):
@@ -489,21 +474,30 @@ def on_project_insert(doc, method):
         # Also track by template row name for depends_on resolution
         tmpl_task_record_to_generated[tmpl.name] = target_task_name
 
-        # [P1] Use duration from the template row first; fall back to the linked Task record.
-        # Template-row duration (days) takes priority so authors can override per-template.
-        # Falls back to the Task record's duration if the template row leaves it at 0.
         duration = tmpl.get("duration") or 0
         if not duration and tmpl.task:
             duration = frappe.db.get_value("Task", tmpl.task, "duration") or 0
 
-        frappe.db.set_value("Task", target_task_name, {
+        parent_task_gen = None
+        if tmpl.task:
+            tmpl_parent = frappe.db.get_value("Task", tmpl.task, "parent_task")
+            if tmpl_parent and tmpl_parent in tmpl_task_record_to_generated:
+                parent_task_gen = tmpl_task_record_to_generated[tmpl_parent]
+
+        task_updates = {
             "duration": duration,
             "npdi_stage_name": tmpl.npdi_stage_name,
             "npdi_module": tmpl.npdi_module or "Core",
             "npdi_responsible_role": tmpl.npdi_responsible_role,
             "npdi_requires_attachment": int(tmpl.npdi_requires_attachment or 0),
             "npdi_launch_milestone": int(tmpl.npdi_launch_milestone or 0),
-        })
+        }
+        if parent_task_gen:
+            task_updates["parent_task"] = parent_task_gen
+
+        frappe.db.set_value("Task", target_task_name, task_updates)
+
+
 
     # ── [P2] Propagate dependency graph from Project Template custom tables ─
     template_name = doc.get("project_template")

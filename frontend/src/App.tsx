@@ -32,11 +32,16 @@ function App() {
 
     if (window.frappe && window.frappe.get_route) {
       const route = window.frappe.get_route();
-      if (route.length >= 3) {
-        if (route[1] === "Project") projectName = route[2];
-        else if (route[1] === "Project Template") templateName = route[2];
+      const projIdx = route.indexOf("Project");
+      const tmplIdx = route.indexOf("Project Template");
+
+      if (projIdx !== -1 && route.length > projIdx + 1 && route[projIdx + 1]) {
+        projectName = route[projIdx + 1];
+      } else if (tmplIdx !== -1 && route.length > tmplIdx + 1 && route[tmplIdx + 1]) {
+        templateName = route[tmplIdx + 1];
       }
     }
+
 
     if (!projectName && !templateName) {
       const route = window.frappe?.get_route?.();
@@ -398,11 +403,15 @@ function App() {
             // @ts-ignore
             if (window.frappe && window.frappe.set_route) {
               // @ts-ignore
-              window.frappe.set_route('npdi_project_dashboard', 'Project', name).then(() => window.dispatchEvent(new Event('npdi_route_changed')));
+              window.frappe.set_route('npdi_project_dashboard', 'Project', name).then(() => {
+                window.dispatchEvent(new Event('npdi_route_changed'));
+              });
             } else {
-              window.location.href = `/app/npdi_project_dashboard/Project/${name}`;
+              window.location.hash = `#npdi_project_dashboard/Project/${name}`;
+              window.dispatchEvent(new Event('npdi_route_changed'));
             }
           }}
+
           onOpenTask={handleTaskClick}
           onCreateProject={() => setShowCreationModal(true)}
         />

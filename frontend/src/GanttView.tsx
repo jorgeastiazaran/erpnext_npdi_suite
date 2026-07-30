@@ -163,7 +163,13 @@ export default function GanttView({
       });
 
       sortedStageTasks.forEach((t) => {
-        const isCritical = t.slack === 0;
+        const isCritical = Boolean(
+          t.isCritical ||
+          t.npdi_cpm_is_critical === 1 ||
+          t.npdi_cpm_is_critical === true ||
+          (typeof t.slack === 'number' && Math.abs(t.slack) <= 0.01) ||
+          (typeof t.npdi_cpm_total_float === 'number' && Math.abs(t.npdi_cpm_total_float) <= 0.01)
+        );
         const realParentId = t.parentTaskId || t.parentId;
         const parentId = realParentId ? realParentId.toString() : stageId;
         const hasChildren = tasks.some(child => child.parentTaskId === t.id);
@@ -179,10 +185,10 @@ export default function GanttView({
         const status = t.status?.toLowerCase();
         
         if (status === 'completed') barColor = '#22c55e'; // Green
-        else if (status === 'blocked') barColor = 'var(--status-blocked-text)'; // Red
+        else if (status === 'blocked') barColor = '#ef4444'; // Red
+        else if (isCritical) barColor = '#ef4444'; // Critical Path = Red!
         else if (status === 'awaiting approval') barColor = 'var(--status-concept-text)'; // Amber
         else if (status === 'in progress') barColor = 'var(--accent)'; // Blue
-        else if (isCritical) barColor = 'var(--status-blocked-text)'; // Critical = Red
         else {
           const stage = (t.stageName || '').toLowerCase();
           if (stage.includes('idea')) barColor = 'var(--status-idea-text)';
@@ -195,6 +201,7 @@ export default function GanttView({
         finalTasks.push({
           id: t.id.toString(),
           name: isCritical && status !== 'completed' ? `🔥 ${t.name}` : t.name,
+
           start: new Date(t.planStartDate),
           end: new Date(t.planEndDate),
           progress: status === 'completed' ? 100 : (status === 'in progress' ? 50 : 0),

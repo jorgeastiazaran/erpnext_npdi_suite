@@ -1,5 +1,6 @@
 import frappe
-from erpnext_npdi_suite.engine.cpm import CPMEngine
+from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
+
 
 @frappe.whitelist()
 def get_project_data(project_name):

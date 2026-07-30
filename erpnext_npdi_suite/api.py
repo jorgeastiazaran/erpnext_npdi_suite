@@ -1013,7 +1013,8 @@ def get_project_dashboard_data():
                 if t.status == "Completed":
                     completed += 1
                 
-                is_delayed = t.status == "Overdue" or (t.exp_end_date and t.exp_end_date < frappe.utils.getdate() and t.status != "Completed")
+                is_delayed = t.status == "Overdue" or (t.exp_end_date and frappe.utils.getdate(t.exp_end_date) < frappe.utils.getdate() and t.status != "Completed")
+
                 if is_delayed:
                     delayed += 1
                 

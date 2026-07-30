@@ -344,8 +344,21 @@ const ProjectsDashboard: React.FC<Props> = ({ onOpenProject, onCreateProject, on
                 </thead>
                 <tbody>
                   {filteredProjects.map(p => (
-                    <tr key={p.name} style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      <td style={{ padding: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>{p.title}</td>
+                    <tr 
+                      key={p.name} 
+                      onClick={() => onOpenProject(p.name)}
+                      style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', cursor: 'pointer' }}
+                    >
+                      <td style={{ padding: '16px', fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }}>
+                        <a 
+                          href={`#npdi_project_dashboard/Project/${p.name}`}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenProject(p.name); }}
+                          style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                        >
+                          {p.title}
+                        </a>
+                      </td>
+
                       <td style={{ padding: '16px', fontSize: '13px' }}>
                         <span style={{ background: 'var(--bg-surface-2)', padding: '4px 8px', borderRadius: '12px' }}>{p.stage}</span>
                       </td>
