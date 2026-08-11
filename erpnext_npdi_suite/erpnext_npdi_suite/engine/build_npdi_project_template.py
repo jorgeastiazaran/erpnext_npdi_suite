@@ -29,28 +29,25 @@ import frappe
 TEMPLATE_NAME = "NPDI Core Template"
 CSV_PATH = os.path.join(
     os.path.dirname(__file__),  # engine/
-    "..", "..", "..", "templates", "npdi_template_erpnext.csv"
+    "..", "..", "..", "templates", "npdi_template_erpnext_import.csv"
 )
 
-# CSV column indices (0-based), based on the header row:
-# ID, Subject, GitHub Sync ID, Project, Is Group, Is Template, Parent Task,
-# Duration (Days), Is Milestone, Task Description, Depends on Tasks,
-# Actual Start Date, Actual Time, Actual End Date, Hito de Lanzamiento,
-# Fin Manual, Inicio Manual, Módulo NPDI, Requiere Evidencia Adjunta,
-# Rol Responsable, Etapa NPDI, ID (Dependent Tasks), Task (Dependent Tasks),
-# Subject (Dependent Tasks), Project (Dependent Tasks)
+# CSV column indices (0-based) for npdi_template_erpnext_import.csv:
+# ID,subject,project,is_group,is_template,parent_task,duration,is_milestone,
+# description,npdi_stage_name,npdi_module,npdi_responsible_role,
+# npdi_requires_attachment,npdi_launch_milestone,depends_on.task
 COL_ID           = 0
 COL_SUBJECT      = 1
-COL_IS_GROUP     = 4
-COL_PARENT_TASK  = 6
-COL_DURATION     = 7
-COL_IS_MILESTONE = 8
-COL_DEPENDS_ON   = 10   # comma-separated predecessor TASK IDs
-COL_LAUNCH_MILE  = 14
-COL_MODULE       = 17
-COL_REQUIRES_ATT = 18
-COL_ROLE         = 19
-COL_STAGE        = 20
+COL_IS_GROUP     = 3
+COL_PARENT_TASK  = 5
+COL_DURATION     = 6
+COL_IS_MILESTONE = 7
+COL_STAGE        = 9
+COL_MODULE       = 10
+COL_ROLE         = 11
+COL_REQUIRES_ATT = 12
+COL_LAUNCH_MILE  = 13
+COL_DEPENDS_ON   = 14
 
 
 def _bool(val):
@@ -65,7 +62,12 @@ def run():
     """
     csv_path = os.path.normpath(CSV_PATH)
     if not os.path.exists(csv_path):
-        frappe.throw(f"CSV not found at: {csv_path}")
+        # Fallback if import file is missing
+        fallback_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "templates", "npdi_template_erpnext.csv")
+        if os.path.exists(fallback_path):
+            csv_path = os.path.normpath(fallback_path)
+        else:
+            frappe.throw(f"CSV not found at: {csv_path}")
 
     # ── Parse CSV ─────────────────────────────────────────────────────────
     tasks_by_id = {}   # task_id → row dict
@@ -73,58 +75,100 @@ def run():
 
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
-        next(reader)  # skip header
+        headers = next(reader)
 
         for row in reader:
-            # Skip continuation rows (empty ID) — those only add dep subjects
-            if not row[COL_ID].strip():
+            if not row or not row[0].strip():
                 continue
 
-            task_id = row[COL_ID].strip()
-            subject  = row[COL_SUBJECT].strip()
+            task_id = row[0].strip()
+            subject = row[COL_SUBJECT].strip() if len(row) > COL_SUBJECT else ""
             if not subject:
                 continue
 
-            # Parse predecessor list
-            raw_deps = row[COL_DEPENDS_ON].strip() if len(row) > COL_DEPENDS_ON else ""
-            depends_on = [d.strip() for d in raw_deps.split(",") if d.strip()]
+            dep_task = row[COL_DEPENDS_ON].strip() if len(row) > COL_DEPENDS_ON else ""
 
-            tasks_by_id[task_id] = {
-                "id":               task_id,
-                "subject":          subject,
-                "is_group":         _bool(row[COL_IS_GROUP]) if len(row) > COL_IS_GROUP else 0,
-                "parent_task_id":   row[COL_PARENT_TASK].strip() if len(row) > COL_PARENT_TASK else "",
-                "duration":         int(float(row[COL_DURATION].strip() or 0)) if len(row) > COL_DURATION else 0,
-                "is_milestone":     _bool(row[COL_IS_MILESTONE]) if len(row) > COL_IS_MILESTONE else 0,
-                "depends_on":       depends_on,
-                "npdi_launch_milestone":   _bool(row[COL_LAUNCH_MILE]) if len(row) > COL_LAUNCH_MILE else 0,
-                "npdi_module":      row[COL_MODULE].strip() if len(row) > COL_MODULE else "Core",
-                "npdi_requires_attachment": _bool(row[COL_REQUIRES_ATT]) if len(row) > COL_REQUIRES_ATT else 0,
-                "npdi_responsible_role":    row[COL_ROLE].strip() if len(row) > COL_ROLE else "",
-                "npdi_stage_name":  row[COL_STAGE].strip() if len(row) > COL_STAGE else "",
-            }
-            task_order.append(task_id)
+            if task_id not in tasks_by_id:
+                tasks_by_id[task_id] = {
+                    "id":               task_id,
+                    "subject":          subject,
+                    "is_group":         _bool(row[COL_IS_GROUP]) if len(row) > COL_IS_GROUP else 0,
+                    "parent_task_id":   row[COL_PARENT_TASK].strip() if len(row) > COL_PARENT_TASK else "",
+                    "duration":         int(float(row[COL_DURATION].strip() or 0)) if len(row) > COL_DURATION else 0,
+                    "is_milestone":     _bool(row[COL_IS_MILESTONE]) if len(row) > COL_IS_MILESTONE else 0,
+                    "depends_on":       [],
+                    "npdi_launch_milestone":   _bool(row[COL_LAUNCH_MILE]) if len(row) > COL_LAUNCH_MILE else 0,
+                    "npdi_module":      row[COL_MODULE].strip() if len(row) > COL_MODULE else "Core",
+                    "npdi_requires_attachment": _bool(row[COL_REQUIRES_ATT]) if len(row) > COL_REQUIRES_ATT else 0,
+                    "npdi_responsible_role":    row[COL_ROLE].strip() if len(row) > COL_ROLE else "",
+                    "npdi_stage_name":  row[COL_STAGE].strip() if len(row) > COL_STAGE else "",
+                }
+                task_order.append(task_id)
+
+            if dep_task and dep_task not in tasks_by_id[task_id]["depends_on"]:
+                tasks_by_id[task_id]["depends_on"].append(dep_task)
 
     if not tasks_by_id:
         frappe.throw("No valid task rows found in the CSV.")
 
     frappe.logger().info(f"Parsed {len(task_order)} tasks from CSV.")
 
-    # ── Delete existing template if present ───────────────────────────────
+    # ── Delete existing template upfront ──────────────────────────────────
     if frappe.db.exists("Project Template", TEMPLATE_NAME):
         frappe.logger().info(f"Deleting existing template: {TEMPLATE_NAME}")
-        frappe.delete_doc("Project Template", TEMPLATE_NAME,
-                          ignore_permissions=True, force=True)
+        frappe.delete_doc("Project Template", TEMPLATE_NAME, ignore_permissions=True, force=True)
         frappe.db.commit()
 
-    # ── Build Project Template Task rows ──────────────────────────────────
-    # Map CSV task IDs → sequential position (1-based idx in template)
-    id_to_position = {tid: (i + 1) for i, tid in enumerate(task_order)}
+    # ── Create Template Task master records ───────────────────────────────
+    id_to_task_doc = {}
+    for task_id in task_order:
+        t = tasks_by_id[task_id]
+        task_doc = frappe.get_doc({
+            "doctype": "Task",
+            "subject": t["subject"],
+            "is_template": 1,
+            "is_group": t["is_group"],
+            "duration": t["duration"],
+            "is_milestone": t["is_milestone"],
+            "npdi_stage_name": t["npdi_stage_name"],
+            "npdi_module": t["npdi_module"] or "Core",
+            "npdi_responsible_role": t["npdi_responsible_role"],
+            "npdi_requires_attachment": t["npdi_requires_attachment"],
+            "npdi_launch_milestone": t["npdi_launch_milestone"],
+        })
+        task_doc.insert(ignore_permissions=True)
+        id_to_task_doc[task_id] = task_doc
 
+    frappe.db.commit()
+
+    # ── Wire parent_task and dependencies on template Task documents ──────
+    for task_id in task_order:
+        t = tasks_by_id[task_id]
+        task_doc = id_to_task_doc[task_id]
+        changed = False
+
+        if t.get("parent_task_id") and t["parent_task_id"] in id_to_task_doc:
+            task_doc.parent_task = id_to_task_doc[t["parent_task_id"]].name
+            changed = True
+
+        for dep_id in t["depends_on"]:
+            dep_doc = id_to_task_doc.get(dep_id)
+            if dep_doc:
+                task_doc.append("depends_on", {"task": dep_doc.name})
+                changed = True
+
+        if changed:
+            task_doc.save(ignore_permissions=True)
+
+    frappe.db.commit()
+
+    # ── Build Project Template Task rows ──────────────────────────────────
     template_task_rows = []
     for task_id in task_order:
         t = tasks_by_id[task_id]
+        task_doc = id_to_task_doc[task_id]
         row_data = {
+            "task":             task_doc.name,
             "subject":          t["subject"],
             "duration":         t["duration"],
             "is_group":         t["is_group"],
@@ -136,18 +180,6 @@ def run():
             "npdi_requires_attachment": t["npdi_requires_attachment"],
             "npdi_launch_milestone":    t["npdi_launch_milestone"],
         }
-
-        # Wire dependency rows using Task Template Depends On child table
-        # (only if the doctype exists in this ERPNext version)
-        dep_rows = []
-        if frappe.db.exists("DocType", "Task Template Depends On"):
-            for dep_id in t["depends_on"]:
-                if dep_id in id_to_position:
-                    dep_rows.append({"task": dep_id})  # populated after template save
-
-        if dep_rows:
-            row_data["depends_on"] = dep_rows
-
         template_task_rows.append(row_data)
 
     # ── Create Project Template document ──────────────────────────────────

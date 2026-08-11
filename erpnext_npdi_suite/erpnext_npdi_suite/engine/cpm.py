@@ -210,8 +210,11 @@ class CPMEngine:
         doc = self.tasks[task_name]
         if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start") and doc.get("npdi_manual_end"):
             return (get_datetime(doc.npdi_manual_end) - get_datetime(doc.npdi_manual_start)).total_seconds() / 3600.0
-        elif doc.get("duration"):
-            return float(doc.duration) * 24.0
+        elif doc.get("is_milestone") or doc.get("npdi_launch_milestone"):
+            return 0.0
+        elif doc.get("duration") is not None and str(doc.get("duration")).strip() != "":
+            val = float(doc.duration)
+            return val * 24.0
         else:
             return 24.0 # 1 día por defecto
 
@@ -556,7 +559,22 @@ def on_project_insert(doc, method):
                 for u_task in upstream_tasks:
                     add_dep(t_task, u_task)
 
-    # 3. Append to the actual instantiated Task documents
+    # 3. Process native Task.depends_on from template Task records and template Task rows
+    for tmpl in template_tasks:
+        target_gen = tmpl_task_record_to_generated.get(tmpl.name)
+        if not target_gen and tmpl.task:
+            target_gen = tmpl_task_record_to_generated.get(tmpl.task)
+        if not target_gen:
+            continue
+        if tmpl.task and frappe.db.exists("Task", tmpl.task):
+            tmpl_task_doc = frappe.get_doc("Task", tmpl.task)
+            for d in (tmpl_task_doc.get("depends_on") or []):
+                if d.task:
+                    dep_gen = tmpl_task_record_to_generated.get(d.task)
+                    if dep_gen:
+                        add_dep(target_gen, dep_gen)
+
+    # 4. Append to the actual instantiated Task documents
     for target_task_name, depends_on_set in deps_to_append.items():
         target_doc = frappe.get_doc("Task", target_task_name)
         existing_dep_ids = {d.task for d in (target_doc.depends_on or [])}
