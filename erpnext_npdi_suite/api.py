@@ -602,6 +602,7 @@ def upsert_template_task(template, task_data):
                         task_doc.is_milestone = int(is_milestone)
                         task_doc.is_group = 1 if parent_task_stub is None and _has_children(row.name, parent_doc) else int(task_doc.is_group or 0)
                         task_doc.parent_task = parent_task_stub
+                        task_doc.npdi_responsible_role = role_id
                         task_doc.save(ignore_permissions=True)
                     
                     found = True
@@ -618,7 +619,8 @@ def upsert_template_task(template, task_data):
                 "is_milestone": int(is_milestone),
                 "is_group": 0,
                 "parent_task": parent_task_stub,
-                "is_template": 1
+                "is_template": 1,
+                "npdi_responsible_role": role_id
             })
             task_doc.insert(ignore_permissions=True)
             task_stub_name = task_doc.name

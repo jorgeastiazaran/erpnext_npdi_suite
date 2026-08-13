@@ -68,7 +68,7 @@ export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existing
     setEditSaving(true);
     const result = await upsertTaskTemplate({
       id: task.id, templateId, name: editData.name, stageName: editData.stageName,
-      order: task.order, roleId: editData.roleId, isMilestone: editData.isMilestone,
+      order: task.order, roleId: String(editData.roleId), isMilestone: editData.isMilestone,
       isShared: editData.isShared, durationDays: durationInputTodays(editData.durationValue, editData.durationUnit),
       durationUnit: editData.durationUnit, parentId: task.parentId, module: editData.module,
       isLaunchMilestone: editData.isLaunchMilestone,

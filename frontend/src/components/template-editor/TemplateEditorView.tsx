@@ -207,7 +207,7 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
     const order = (allFlatTasks.length + 1) * 10;
     const result = await upsertTaskTemplate({
       templateId: template.id, name: newTask.name, stageName: dialogContext.stageName,
-      order, roleId: parseInt(newTask.roleId), isMilestone: newTask.isMilestone,
+      order, roleId: newTask.roleId, isMilestone: newTask.isMilestone,
       isShared: newTask.isShared, durationDays: durationInputTodays(newTask.durationValue, newTask.durationUnit),
       durationUnit: newTask.durationUnit, parentId: dialogContext.parentId, module: 'core',
     });
