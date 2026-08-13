@@ -106,8 +106,8 @@ def run_tests():
     assert t_c.npdi_cpm_is_critical == 0, "Task C should NOT be critical (has 48h float)"
     assert t_d.npdi_cpm_is_critical == 0, "Task D should NOT be critical (has 48h float)"
     
-    assert abs(flt(t_c.npdi_cpm_total_float) - 48.0) < 0.001, "Task C float should be 48 hours"
-    assert abs(flt(t_d.npdi_cpm_total_float) - 48.0) < 0.001, "Task D float should be 48 hours"
+    assert abs(flt(t_c.npdi_cpm_total_float) - 2.0) < 0.001, "Task C float should be 2.0 days"
+    assert abs(flt(t_d.npdi_cpm_total_float) - 2.0) < 0.001, "Task D float should be 2.0 days"
 
     print("Success: Critical Path and slack float calculated correctly!")
 

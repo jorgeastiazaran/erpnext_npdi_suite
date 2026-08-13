@@ -37,14 +37,19 @@ export const addTemplateTaskDependency = async (taskId: string, depId: string, t
   });
 };
 
-export const removeTemplateTaskDependency = async (depId: string, templateId: string) => {
+export const removeTemplateTaskDependency = async (depId: string, templateId: string, taskId?: string, depTaskId?: string) => {
   return new Promise<any>((resolve) => {
     // @ts-ignore
     if (!window.frappe) return resolve({ success: false, error: "Frappe not found" });
     // @ts-ignore
     frappe.call({
       method: "erpnext_npdi_suite.api.remove_template_task_dependency",
-      args: { dep_row_name: depId, template: templateId },
+      args: {
+        dep_row_name: depId,
+        template: templateId,
+        task_row_name: taskId,
+        depends_on_row_name: depTaskId
+      },
       callback: (r: any) => resolve(r.message || {success: false})
     });
   });

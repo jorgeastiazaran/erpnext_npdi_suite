@@ -68,7 +68,7 @@ export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existing
     setEditSaving(true);
     const result = await upsertTaskTemplate({
       id: task.id, templateId, name: editData.name, stageName: editData.stageName,
-      order: task.order, roleId: editData.roleId, isMilestone: editData.isMilestone,
+      order: task.order, roleId: String(editData.roleId), isMilestone: editData.isMilestone,
       isShared: editData.isShared, durationDays: durationInputTodays(editData.durationValue, editData.durationUnit),
       durationUnit: editData.durationUnit, parentId: task.parentId, module: editData.module,
       isLaunchMilestone: editData.isLaunchMilestone,
@@ -129,11 +129,12 @@ export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existing
 
   const handleRemoveDep = async (depRecordId: string, depTaskId: string) => { 
     // Optimistic remove
-    setOptimisticDeps(optimisticDeps.filter(d => d.dependsOn.id !== depTaskId));
+    setOptimisticDeps(optimisticDeps.filter(d => d.dependsOn?.id !== depTaskId && d.dependsOn !== depTaskId));
     
-    // We only trigger real remove if it's a real DB record (positive or string in this context)
-    // Assuming generated temp IDs are negative strings? Actually just always call it.
-    await removeTemplateTaskDependency(depRecordId, templateId); 
+    const result = await removeTemplateTaskDependency(depRecordId, templateId, task.id, depTaskId); 
+    if (result && !result.success) {
+      alert(result.error || 'Error al eliminar dependencia');
+    }
     if (onRefresh) onRefresh();
   };
 
@@ -286,7 +287,15 @@ export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existing
             <div className="template-task-badges">
               {task.isLaunchMilestone && <span className="badge badge-launch" style={{ fontSize: '9px', background: 'var(--accent)', color: 'white' }}>Lanzamiento</span>}
               {!task.isLaunchMilestone && task.isMilestone && <span className="badge badge-idea" style={{ fontSize: '9px' }}>Hito</span>}
-              {depCount > 0 && <span style={{ fontSize: '9px', color: 'var(--accent)', fontWeight: 600 }}>🔗{depCount}</span>}
+              {depCount > 0 && (
+                <span 
+                  onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                  style={{ fontSize: '9px', color: 'var(--accent)', fontWeight: 600, cursor: 'pointer', background: 'rgba(79, 140, 255, 0.1)', padding: '2px 6px', borderRadius: '4px' }}
+                  title="Ver y editar dependencias"
+                >
+                  🔗{depCount}
+                </span>
+              )}
               {hasChildren && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); setChildrenCollapsed(!childrenCollapsed); }}

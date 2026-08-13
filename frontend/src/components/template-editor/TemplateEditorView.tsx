@@ -207,7 +207,7 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
     const order = (allFlatTasks.length + 1) * 10;
     const result = await upsertTaskTemplate({
       templateId: template.id, name: newTask.name, stageName: dialogContext.stageName,
-      order, roleId: parseInt(newTask.roleId), isMilestone: newTask.isMilestone,
+      order, roleId: newTask.roleId, isMilestone: newTask.isMilestone,
       isShared: newTask.isShared, durationDays: durationInputTodays(newTask.durationValue, newTask.durationUnit),
       durationUnit: newTask.durationUnit, parentId: dialogContext.parentId, module: 'core',
     });
@@ -224,9 +224,12 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
     }
   };
 
-  const handleDeleteTask = async (id: number) => {
+  const handleDeleteTask = async (id: any) => {
     if (confirm('¿Eliminar esta tarea de la plantilla?')) { 
-      await deleteTaskTemplate(id, template.id); 
+      const res = await deleteTaskTemplate(id, template.id); 
+      if (!res?.success) {
+        alert(res?.error || 'Error al eliminar la tarea');
+      }
       startTransition(() => {
         if (onRefresh) onRefresh();
       });

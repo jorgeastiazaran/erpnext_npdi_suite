@@ -261,6 +261,10 @@ def delete_task(task_id):
         task = frappe.get_doc('Task', task_id)
         task.check_permission('delete')
         project = task.project
+
+        # Clean up any Task Depends On rows referencing this task to avoid LinkExistsError
+        frappe.db.sql("DELETE FROM `tabTask Depends On` WHERE task = %s OR parent = %s", (task_id, task_id))
+
         frappe.delete_doc('Task', task_id)
 
         if project:
@@ -473,17 +477,22 @@ def get_template_editor_data(template):
         
         # Attach dependencies to each task
         for t in flat_tasks:
-            t["dependsOn"] = dep_map.get(t["id"], [])
+            t["dependsOn"] = list(dep_map.get(t["id"], []))
             
-            # Fallback to standard Frappe task dependencies
-            if not t["dependsOn"] and t.get("task"):
+            # Also merge dependencies from standard Frappe Task Depends On on the linked Task stub
+            if t.get("task"):
                 try:
-                    standard_deps = frappe.get_all("Task Depends On", filters={"parent": t["task"]}, fields=["depends_on"])
+                    standard_deps = frappe.get_all("Task Depends On", filters={"parent": t["task"]}, fields=["name", "task"])
+                    existing_dep_target_ids = {
+                        d["dependsOn"]["id"] for d in t["dependsOn"] if isinstance(d, dict) and d.get("dependsOn") and "id" in d["dependsOn"]
+                    }
                     for std_dep in standard_deps:
-                        dep_row = next((r for r in flat_tasks if r["task"] == std_dep.depends_on), None)
-                        if dep_row:
+                        # std_dep.task is the stub name of the prerequisite task
+                        dep_row = next((r for r in flat_tasks if r.get("task") == std_dep.task), None)
+                        if dep_row and dep_row["id"] not in existing_dep_target_ids:
+                            existing_dep_target_ids.add(dep_row["id"])
                             t["dependsOn"].append({
-                                "id": "std_" + dep_row["id"],
+                                "id": std_dep.name,  # standard Task Depends On row name
                                 "dependsOn": {
                                     "id": dep_row["id"],
                                     "taskName": dep_row["taskName"],
@@ -602,6 +611,7 @@ def upsert_template_task(template, task_data):
                         task_doc.is_milestone = int(is_milestone)
                         task_doc.is_group = 1 if parent_task_stub is None and _has_children(row.name, parent_doc) else int(task_doc.is_group or 0)
                         task_doc.parent_task = parent_task_stub
+                        task_doc.npdi_responsible_role = role_id
                         task_doc.save(ignore_permissions=True)
                     
                     found = True
@@ -618,7 +628,8 @@ def upsert_template_task(template, task_data):
                 "is_milestone": int(is_milestone),
                 "is_group": 0,
                 "parent_task": parent_task_stub,
-                "is_template": 1
+                "is_template": 1,
+                "npdi_responsible_role": role_id
             })
             task_doc.insert(ignore_permissions=True)
             task_stub_name = task_doc.name
@@ -693,17 +704,19 @@ def _has_children(row_name, template_doc):
 
 @frappe.whitelist()
 def delete_template_task(template, task_row_name):
-    """Delete a template task row and cascade-remove dependencies."""
+    """Delete a template task row, clean up all dependency links, and cascade."""
     try:
         parent_doc = frappe.get_doc("Project Template", template)
         
         # Collect this task and all its descendants
         rows_to_delete = {task_row_name}
+        task_stubs_to_delete = set()
         
         def collect_children(row_name):
             row = next((r for r in parent_doc.tasks if r.name == row_name), None)
             if not row or not row.task:
                 return
+            task_stubs_to_delete.add(row.task)
             for other in parent_doc.tasks:
                 if other.task and other.name != row_name:
                     parent_stub = frappe.db.get_value("Task", other.task, "parent_task")
@@ -712,18 +725,40 @@ def delete_template_task(template, task_row_name):
                         collect_children(other.name)
         
         collect_children(task_row_name)
+
+        init_row = next((r for r in parent_doc.tasks if r.name == task_row_name), None)
+        if init_row and init_row.task:
+            task_stubs_to_delete.add(init_row.task)
         
-        # Remove dependencies referencing any of these tasks
+        # Clean up tabTask Depends On for any linked task stubs to prevent LinkExistsError
+        if task_stubs_to_delete:
+            placeholders = ", ".join(["%s"] * len(task_stubs_to_delete))
+            stubs_tuple = tuple(task_stubs_to_delete)
+            frappe.db.sql(
+                f"DELETE FROM `tabTask Depends On` WHERE task IN ({placeholders}) OR parent IN ({placeholders})",
+                stubs_tuple + stubs_tuple
+            )
+
+        # Remove dependencies referencing any of these tasks in npdi_task_dependencies
         for d in list(parent_doc.get("npdi_task_dependencies") or []):
             if d.task in rows_to_delete or d.depends_on in rows_to_delete:
                 parent_doc.remove(d)
         
-        # Remove the task rows
+        # Remove the task rows from template
         for t in list(parent_doc.tasks):
             if t.name in rows_to_delete:
                 parent_doc.remove(t)
                 
         parent_doc.save(ignore_permissions=True)
+
+        # Also safely delete the template task stubs if is_template=1
+        for stub in task_stubs_to_delete:
+            try:
+                if frappe.db.exists("Task", stub) and frappe.db.get_value("Task", stub, "is_template"):
+                    frappe.delete_doc("Task", stub, ignore_permissions=True, force=True)
+            except Exception:
+                pass
+
         return {"success": True}
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "delete_template_task")
@@ -845,47 +880,68 @@ def add_template_task_dependency(task_row_name, depends_on_row_name, template):
 
 
 @frappe.whitelist()
-def remove_template_task_dependency(dep_row_name, template):
+def remove_template_task_dependency(dep_row_name, template, task_row_name=None, depends_on_row_name=None):
     """
     Remove a template task dependency and cascade from children.
+    Handles both NPDI Template Task Dependency child table and Frappe Task Depends On rows.
     """
     try:
         parent_doc = frappe.get_doc("Project Template", template)
         
-        # Find the dependency record
+        # 1. Find and remove from npdi_task_dependencies if present
         dep_record = None
         for d in (parent_doc.get("npdi_task_dependencies") or []):
-            if d.name == dep_row_name:
+            if d.name == dep_row_name or (task_row_name and depends_on_row_name and d.task == task_row_name and d.depends_on == depends_on_row_name):
                 dep_record = d
                 break
         
-        if not dep_record:
-            return {"success": True}  # Already gone
-        
-        task_row_name = dep_record.task
-        depends_on_row_name = dep_record.depends_on
-        
-        # Collect children that also have this dependency
-        children_rows = []
-        def collect_children(row_name):
-            row = next((r for r in parent_doc.tasks if r.name == row_name), None)
-            if not row or not row.task:
-                return
-            for other in parent_doc.tasks:
-                if other.task and other.name != row_name:
-                    ps = frappe.db.get_value("Task", other.task, "parent_task")
-                    if ps == row.task:
-                        children_rows.append(other.name)
-                        collect_children(other.name)
-        collect_children(task_row_name)
-        
-        # Remove dependency from task + all children
-        affected = {task_row_name} | set(children_rows)
-        for d in list(parent_doc.get("npdi_task_dependencies") or []):
-            if d.depends_on == depends_on_row_name and d.task in affected:
-                parent_doc.remove(d)
-        
-        parent_doc.save(ignore_permissions=True)
+        if dep_record:
+            actual_task_row = dep_record.task
+            actual_dep_row = dep_record.depends_on
+            
+            # Collect children that also have this dependency
+            children_rows = []
+            def collect_children(row_name):
+                row = next((r for r in parent_doc.tasks if r.name == row_name), None)
+                if not row or not row.task:
+                    return
+                for other in parent_doc.tasks:
+                    if other.task and other.name != row_name:
+                        ps = frappe.db.get_value("Task", other.task, "parent_task")
+                        if ps == row.task:
+                            children_rows.append(other.name)
+                            collect_children(other.name)
+            collect_children(actual_task_row)
+            
+            # Remove dependency from task + all children
+            affected = {actual_task_row} | set(children_rows)
+            for d in list(parent_doc.get("npdi_task_dependencies") or []):
+                if d.depends_on == actual_dep_row and d.task in affected:
+                    parent_doc.remove(d)
+            
+            parent_doc.save(ignore_permissions=True)
+
+        # 2. Also clean up from tabTask Depends On (if standard Task stub dependency)
+        # Find task stub and dep stub if possible
+        task_stub = None
+        dep_stub = None
+        if task_row_name:
+            t_row = next((r for r in parent_doc.tasks if r.name == task_row_name), None)
+            if t_row and t_row.task:
+                task_stub = t_row.task
+        if depends_on_row_name:
+            d_row = next((r for r in parent_doc.tasks if r.name == depends_on_row_name), None)
+            if d_row and d_row.task:
+                dep_stub = d_row.task
+
+        # Delete by Task Depends On name if it exists
+        if dep_row_name and frappe.db.exists("Task Depends On", dep_row_name):
+            frappe.db.sql("DELETE FROM `tabTask Depends On` WHERE name = %s", dep_row_name)
+
+        # Delete by (parent, task) stub pair if stubs are known
+        if task_stub and dep_stub:
+            frappe.db.sql("DELETE FROM `tabTask Depends On` WHERE parent = %s AND task = %s", (task_stub, dep_stub))
+
         return {"success": True}
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "remove_template_task_dependency")
