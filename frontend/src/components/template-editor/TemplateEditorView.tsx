@@ -224,9 +224,12 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
     }
   };
 
-  const handleDeleteTask = async (id: number) => {
+  const handleDeleteTask = async (id: any) => {
     if (confirm('¿Eliminar esta tarea de la plantilla?')) { 
-      await deleteTaskTemplate(id, template.id); 
+      const res = await deleteTaskTemplate(id, template.id); 
+      if (!res?.success) {
+        alert(res?.error || 'Error al eliminar la tarea');
+      }
       startTransition(() => {
         if (onRefresh) onRefresh();
       });
