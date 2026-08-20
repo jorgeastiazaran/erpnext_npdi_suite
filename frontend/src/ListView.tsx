@@ -95,6 +95,18 @@ export default function ListView({
     };
   }, [dragState.sourceId, onAddTaskDependency]);
 
+  const normalizeStatus = (status?: string): string => {
+    if (!status) return 'Pending';
+    const s = status.toLowerCase();
+    if (s === 'open' || s === 'pending') return 'Pending';
+    if (s === 'working' || s === 'in progress') return 'In Progress';
+    if (s === 'pending review' || s === 'awaiting approval') return 'Awaiting Approval';
+    if (s === 'completed') return 'Completed';
+    if (s === 'overdue' || s === 'blocked') return 'Blocked';
+    if (s === 'cancelled' || s === 'skipped') return 'Cancelled';
+    return status;
+  };
+
   const handleDragStart = (taskId: string, e: React.MouseEvent, coords: {x: number, y: number}) => {
     e.preventDefault();
     setDragState({ sourceId: taskId, startCoords: coords, currentCoords: { x: e.clientX, y: e.clientY }, hoverTargetId: null });
@@ -113,7 +125,7 @@ export default function ListView({
     let depth = 0;
     let current = allFlatTasks.find((t: any) => t.id === taskId);
     const visited = new Set<string>();
-    while (current?.parentTaskId && !visited.has(current.id)) {
+    while (current && current.parentTaskId && !visited.has(current.id)) {
       visited.add(current.id);
       depth++;
       current = allFlatTasks.find((t: any) => t.id === current.parentTaskId);
@@ -133,10 +145,10 @@ export default function ListView({
         const hasChildren = stageTasks.some((t: any) => t.parentTaskId === task.id);
         if (!hasChildren) return;
         const taskDepth = getTaskDepth(task.id, stageTasks);
-        if (taskDepth < expandDepth) {
-          next.delete(task.id);
-        } else {
+        if (taskDepth >= expandDepth) {
           next.add(task.id);
+        } else {
+          next.delete(task.id);
         }
       });
       return next;
@@ -186,12 +198,25 @@ export default function ListView({
     setUpdatingTaskId(null);
   };
 
-  const toggleParent = (id: string, e: React.MouseEvent) => {
+  const handleDurationBlur = async (task: any, newDuration: number) => {
+    setEditingDurationId(null);
+    if (newDuration === task.durationDays || isNaN(newDuration) || newDuration < 0) return;
+    if (onUpdateTask) {
+      setUpdatingTaskId(task.id);
+      await onUpdateTask(task.id, { duration_days: newDuration });
+      setUpdatingTaskId(null);
+    }
+  };
+
+  const toggleParent = (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setCollapsedParents(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
       return next;
     });
   };
@@ -207,14 +232,15 @@ export default function ListView({
 
   const renderTask = (task: any, depth = 0, children: any[] = []) => {
     // Basic properties mapping
-    const isCritical = task.npdi_cpm_is_critical;
-    const slack = task.npdi_cpm_slack || 0;
+    const isCritical = Boolean(task.isCritical || task.npdi_cpm_is_critical || (task.slack !== undefined && task.slack === 0));
+    const slack = task.slack ?? task.npdi_cpm_slack ?? 0;
+    const currentStatus = normalizeStatus(task.status);
     
     const now = new Date();
     now.setHours(0,0,0,0);
     const planEnd = task.planEndDate ? new Date(task.planEndDate) : new Date();
     planEnd.setHours(0,0,0,0);
-    const isOverdue = task.status !== 'Completed' && task.status !== 'Skipped' && planEnd < now;
+    const isOverdue = currentStatus !== 'Completed' && !task.isSkipped && planEnd < now;
     const overdueDays = isOverdue ? Math.round((now.getTime() - planEnd.getTime()) / (1000 * 60 * 60 * 24)) : 0;
 
     const hasChildren = children.length > 0;
@@ -223,7 +249,7 @@ export default function ListView({
     return (
       <React.Fragment key={task.id}>
         <div
-          className={`task-row ${updatingTaskId === task.id ? 'opacity-50' : ''} ${task.isSkipped ? 'task-skipped' : ''} ${task.status?.toLowerCase() === 'completed' ? 'task-completed' : ''} ${isCritical && !task.isSkipped && task.status?.toLowerCase() !== 'completed' ? (isOverdue ? 'task-overdue-critical' : 'task-critical') : ''} ${dragState.hoverTargetId === task.id && dragState.sourceId !== task.id ? 'drag-dep-target' : ''}`}
+          className={`task-row ${updatingTaskId === task.id ? 'opacity-50' : ''} ${task.isSkipped ? 'task-skipped' : ''} ${currentStatus === 'Completed' ? 'task-completed' : ''} ${isCritical && !task.isSkipped && currentStatus !== 'Completed' ? (isOverdue ? 'task-overdue-critical' : 'task-critical') : ''} ${dragState.hoverTargetId === task.id && dragState.sourceId !== task.id ? 'drag-dep-target' : ''}`}
           onClick={() => { setSelectedTaskId(task.id); onTaskClick?.(task.id); }}
           onMouseEnter={() => handleDragEnter(task.id)}
           onMouseLeave={() => handleDragEnter(null)}
@@ -232,11 +258,11 @@ export default function ListView({
             paddingLeft: `calc(var(--space-4) + ${depth * 28}px)`,
             borderLeft: dragState.hoverTargetId === task.id && dragState.sourceId !== task.id
               ? '5px solid var(--accent)'
-              : (task.status?.toLowerCase() === 'in progress' ? '5px solid var(--accent)' : 
-                (task.status?.toLowerCase() === 'blocked' ? '5px solid var(--status-blocked-text)' : '5px solid transparent')),
+              : (currentStatus === 'In Progress' ? '5px solid var(--accent)' : 
+                (currentStatus === 'Blocked' ? '5px solid var(--status-blocked-text)' : '5px solid transparent')),
             background: dragState.hoverTargetId === task.id && dragState.sourceId !== task.id
               ? 'rgba(79, 140, 255, 0.08)'
-              : (hasChildren && !isCollapsed ? 'var(--bg-surface-2)' : (task.status?.toLowerCase() === 'in progress' ? 'rgba(79, 140, 255, 0.05)' : undefined)),
+              : (hasChildren && !isCollapsed ? 'var(--bg-surface-2)' : (currentStatus === 'In Progress' ? 'rgba(79, 140, 255, 0.05)' : undefined)),
             outline: dragState.hoverTargetId === task.id && dragState.sourceId !== task.id ? '1.5px dashed var(--accent)' : undefined,
             transition: 'background 0.15s, outline 0.15s',
             position: 'relative'
@@ -400,7 +426,7 @@ export default function ListView({
                            status === 'In Progress' ? 'En curso' : 
                            status === 'Awaiting Approval' ? 'Esperando Aprobación' : 
                            status === 'Completed' ? 'Completado' : 'Bloqueado'}
-                    className={`status-btn ${task.status?.toLowerCase() === status.toLowerCase() ? `active ${status.toLowerCase().replace(' ', '-')}` : ''}`}
+                    className={`status-btn ${currentStatus === status ? `active ${status.toLowerCase().replace(' ', '-')}` : ''}`}
                     onClick={(e) => { e.stopPropagation(); handleStatusChangeSafe(task.id, status); }}
                   >
                     {status === 'Pending' ? 'Pendiente' : 

@@ -97,6 +97,19 @@ export default function GanttView({
     }
   };
 
+  // Helper to normalize backend status to standardized UI status
+  const normalizeStatus = (status?: string): string => {
+    if (!status) return 'Pending';
+    const s = status.toLowerCase();
+    if (s === 'open' || s === 'pending') return 'Pending';
+    if (s === 'working' || s === 'in progress') return 'In Progress';
+    if (s === 'pending review' || s === 'awaiting approval') return 'Awaiting Approval';
+    if (s === 'completed') return 'Completed';
+    if (s === 'overdue' || s === 'blocked') return 'Blocked';
+    if (s === 'cancelled' || s === 'skipped') return 'Cancelled';
+    return status;
+  };
+
   // INEF-04: Pre-calcular un Map para lookups O(1) en lugar de .find() O(n) por fila
   const taskById = useMemo(
     () => new Map(tasks.map((t) => [t.id.toString(), t])),
@@ -108,14 +121,16 @@ export default function GanttView({
     const summaries: Record<string, Record<string, number>> = {};
     
     tasks.forEach(t => {
-      const s = t.status || 'Pending';
+      const s = normalizeStatus(t.status);
       const stageId = `stage-${(t.stageName || 'General').toLowerCase().replace(/\s+/g, '-')}`;
       
       const updateCount = (id: string) => {
         if (!summaries[id]) {
           summaries[id] = { 'Pending': 0, 'In Progress': 0, 'Awaiting Approval': 0, 'Completed': 0, 'Blocked': 0 };
         }
-        summaries[id][s] = (summaries[id][s] || 0) + 1;
+        if (summaries[id][s] !== undefined) {
+          summaries[id][s] = (summaries[id][s] || 0) + 1;
+        }
       };
 
       updateCount(stageId);
@@ -124,7 +139,7 @@ export default function GanttView({
     return summaries;
   }, [tasks]);
 
-  // Map our tasks to gantt-task-react format
+  // Map our tasks to gantt-task-react format with proper recursive hierarchy
   const ganttTasks: Task[] = useMemo(() => {
     const grouped = tasks.reduce((acc, t) => {
       const stage = t.stageName || 'General';
@@ -138,19 +153,17 @@ export default function GanttView({
 
     Object.entries(grouped).forEach(([stageName, stageTasks]) => {
       const stageId = `stage-${stageName.toLowerCase().replace(/\s+/g, '-')}`;
-      const sortedStageTasks = [...stageTasks].sort((a, b) => a.id - b.id);
+      if (stageTasks.length === 0) return;
 
-      if (sortedStageTasks.length === 0) return;
-
-      const stageStart = new Date(Math.min(...sortedStageTasks.map(t => new Date(t.planStartDate).getTime())));
-      const stageEnd = new Date(Math.max(...sortedStageTasks.map(t => new Date(t.planEndDate).getTime())));
+      const stageStart = new Date(Math.min(...stageTasks.map(t => new Date(t.planStartDate).getTime())));
+      const stageEnd = new Date(Math.max(...stageTasks.map(t => new Date(t.planEndDate).getTime())));
 
       finalTasks.push({
         id: stageId,
         name: stageName.toUpperCase(),
         start: stageStart,
         end: stageEnd,
-        progress: sortedStageTasks.every(t => t.status === 'Completed') ? 100 : 0,
+        progress: stageTasks.every(t => normalizeStatus(t.status) === 'Completed') ? 100 : 0,
         type: 'project',
         hideChildren: collapsedIds.has(stageId),
         displayOrder: currentDisplayOrder++,
@@ -162,11 +175,24 @@ export default function GanttView({
         }
       });
 
-      sortedStageTasks.forEach((t) => {
-        const isCritical = t.slack === 0;
-        const realParentId = t.parentTaskId || t.parentId;
-        const parentId = realParentId ? realParentId.toString() : stageId;
-        const hasChildren = tasks.some(child => child.parentTaskId === t.id);
+      // Build child map for this stage
+      const childrenByParent = new Map<string, any[]>();
+      stageTasks.forEach(t => {
+        const pId = t.parentTaskId ? t.parentTaskId.toString() : null;
+        if (pId) {
+          if (!childrenByParent.has(pId)) childrenByParent.set(pId, []);
+          childrenByParent.get(pId)!.push(t);
+        }
+      });
+
+      // Top level tasks within this stage
+      const topLevelTasks = stageTasks.filter(t => !t.parentTaskId || !stageTasks.some(p => p.id.toString() === t.parentTaskId?.toString()));
+      topLevelTasks.sort((a, b) => new Date(a.planStartDate).getTime() - new Date(b.planStartDate).getTime());
+
+      const appendTaskHierarchy = (t: any, parentProjectId: string) => {
+        const isCritical = Boolean(t.isCritical || t.npdi_cpm_is_critical || t.slack === 0);
+        const childList = childrenByParent.get(t.id.toString()) || [];
+        const hasChildren = childList.length > 0;
         
         const rawDeps = t.dependencies || t.dependsOn || [];
         const dependencyIds = rawDeps.map((d: any) => {
@@ -176,7 +202,7 @@ export default function GanttView({
         }).filter(Boolean);
 
         let barColor = 'var(--accent)';
-        const status = t.status?.toLowerCase();
+        const status = normalizeStatus(t.status).toLowerCase();
         
         if (status === 'completed') barColor = '#22c55e'; // Green
         else if (status === 'blocked') barColor = 'var(--status-blocked-text)'; // Red
@@ -199,21 +225,21 @@ export default function GanttView({
           end: new Date(t.planEndDate),
           progress: status === 'completed' ? 100 : (status === 'in progress' ? 50 : 0),
           type: t.isMilestone ? 'milestone' : (hasChildren ? 'project' : 'task'),
-          project: parentId,
+          project: parentProjectId,
           hideChildren: collapsedIds.has(t.id.toString()),
           dependencies: dependencyIds,
           styles: {
             progressColor: barColor,
             progressSelectedColor: barColor,
-            backgroundColor: status === 'Blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
+            backgroundColor: status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.05)',
           },
           displayOrder: currentDisplayOrder++,
           isDisabled: t.isSkipped,
           fontSize: '11px',
         });
 
-        // Phase 6G: Add ghost task for Baseline if toggled on
-        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate && t.baselineStartDate !== t.planStartDate) {
+        // Add ghost task for Baseline if toggled on and dates exist
+        if (showBaseline && !t.isSkipped && t.baselineStartDate && t.baselineEndDate) {
           finalTasks.push({
             id: `baseline-${t.id}`,
             name: `[Base] ${t.name}`,
@@ -221,7 +247,7 @@ export default function GanttView({
             end: new Date(t.baselineEndDate),
             progress: 100,
             type: 'task',
-            project: parentId,
+            project: parentProjectId,
             hideChildren: collapsedIds.has(t.id.toString()),
             dependencies: [],
             styles: {
@@ -235,6 +261,16 @@ export default function GanttView({
             fontSize: '9px',
           });
         }
+
+        // Recursively append direct children
+        childList.sort((a, b) => new Date(a.planStartDate).getTime() - new Date(b.planStartDate).getTime());
+        childList.forEach(child => {
+          appendTaskHierarchy(child, t.id.toString());
+        });
+      };
+
+      topLevelTasks.forEach(topTask => {
+        appendTaskHierarchy(topTask, stageId);
       });
     });
 
@@ -544,7 +580,7 @@ export default function GanttView({
                           // INEF-04: lookup O(1) con Map pre-calculado
                           const task = taskById.get(t.id);
                           if (!task) return null;
-                          const currentStatus = task.status?.toLowerCase() || 'pending';
+                          const currentStatus = normalizeStatus(task.status);
                           const counts = statusSummaries[t.id] || {};
                           const statusList = [
                             { val: 'Pending', label: 'P', color: 'var(--border)' },
@@ -562,8 +598,20 @@ export default function GanttView({
                                   <div key={s.val} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                                     <div 
                                       title={`${s.label}${isParentTask ? `: ${count}` : ''}`}
-                                      onClick={async (e) => { if (isParentTask || !onStatusChange) return; e.stopPropagation(); const res = await onStatusChange(task.id, s.val); if (res.success) router.refresh(); }}
-                                      style={{ width: '8px', height: '8px', borderRadius: '50%', border: `1.2px solid ${s.color}`, background: isParentTask ? (count > 0 ? s.color : 'transparent') : (currentStatus === s.val.toLowerCase() ? s.color : 'transparent'), cursor: isParentTask ? 'default' : 'pointer' }}
+                                      onClick={async (e) => { 
+                                        if (isParentTask || !onStatusChange) return; 
+                                        e.stopPropagation(); 
+                                        const res = await onStatusChange(task.id, s.val); 
+                                        if (res?.success) router.refresh(); 
+                                      }}
+                                      style={{ 
+                                        width: '8px', 
+                                        height: '8px', 
+                                        borderRadius: '50%', 
+                                        border: `1.2px solid ${s.color}`, 
+                                        background: isParentTask ? (count > 0 ? s.color : 'transparent') : (currentStatus === s.val ? s.color : 'transparent'), 
+                                        cursor: isParentTask ? 'default' : 'pointer' 
+                                      }}
                                     />
                                     {isParentTask && count > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{count}</span>}
                                   </div>
