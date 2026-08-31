@@ -141,6 +141,14 @@ export default function GanttView({
 
   // Map our tasks to gantt-task-react format with proper recursive hierarchy
   const ganttTasks: Task[] = useMemo(() => {
+    // Track the first appearance index of each stage in the tasks array
+    // (tasks come pre-sorted by template idx from the backend)
+    const stageFirstIndex: Record<string, number> = {};
+    tasks.forEach((t, idx) => {
+      const stage = t.stageName || 'General';
+      if (stageFirstIndex[stage] === undefined) stageFirstIndex[stage] = idx;
+    });
+
     const grouped = tasks.reduce((acc, t) => {
       const stage = t.stageName || 'General';
       if (!acc[stage]) acc[stage] = [];
@@ -148,10 +156,15 @@ export default function GanttView({
       return acc;
     }, {} as Record<string, any[]>);
 
+    // Sort stages by first task appearance order, preserving template sequence
+    const sortedEntries = Object.entries(grouped).sort(
+      ([a], [b]) => (stageFirstIndex[a] ?? 999) - (stageFirstIndex[b] ?? 999)
+    );
+
     const finalTasks: Task[] = [];
     let currentDisplayOrder = 1;
 
-    Object.entries(grouped).forEach(([stageName, stageTasks]) => {
+    sortedEntries.forEach(([stageName, stageTasks]) => {
       const stageId = `stage-${stageName.toLowerCase().replace(/\s+/g, '-')}`;
       if (stageTasks.length === 0) return;
 
