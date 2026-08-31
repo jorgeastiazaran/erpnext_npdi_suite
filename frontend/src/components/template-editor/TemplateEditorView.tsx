@@ -29,13 +29,26 @@ import {
   addTemplateTaskDependency,
   removeTemplateTaskDependency,
   addStageTemplateDependency,
-  removeStageTemplateDependency
+  removeStageTemplateDependency,
+  getNPDIStages
 } from './api_wrappers';
 
 export default function TemplateEditorClient({ template, allRoles, onRefresh }: TemplateEditorClientProps) {
   const tasks = template.tasks || [];
   const allFlatTasks = flattenTasks(tasks);
   const existingStageNames: string[] = Array.from(new Set(allFlatTasks.map((t: any) => t.stageName as string)));
+
+  const [npdiStages, setNpdiStages] = useState<Array<{ name: string; stage_name: string; color?: string; stage_order?: number; is_group?: number }>>([]);
+  const [selectedPresetStage, setSelectedPresetStage] = useState('');
+  const [isCustomStage, setIsCustomStage] = useState(false);
+
+  useEffect(() => {
+    getNPDIStages().then(res => {
+      if (res.success && res.stages) {
+        setNpdiStages(res.stages);
+      }
+    });
+  }, []);
 
   
   const isPending = false; const startTransition = (cb: any) => cb();
@@ -189,11 +202,18 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
   };
 
   // Open dialog for new stage
-  const openNewStageDialog = () => { setNewStageOpen(true); setNewStageName(''); };
+  const openNewStageDialog = () => {
+    setNewStageOpen(true);
+    setNewStageName('');
+    setIsCustomStage(false);
+    const firstUnused = npdiStages.find(s => !existingStageNames.includes(s.name) && !existingStageNames.includes(s.stage_name));
+    setSelectedPresetStage(firstUnused ? (firstUnused.stage_name || firstUnused.name) : (npdiStages[0]?.stage_name || npdiStages[0]?.name || '1 – IDEA'));
+  };
   const confirmNewStage = () => {
-    if (!newStageName.trim()) return;
+    const finalStage = (isCustomStage ? newStageName : selectedPresetStage).trim();
+    if (!finalStage) return;
     setNewStageOpen(false);
-    setDialogContext({ stageName: newStageName.trim(), parentId: null, roleId: '', isShared: false });
+    setDialogContext({ stageName: finalStage, parentId: null, roleId: '', isShared: false });
     setNewTask({ name: '', durationValue: 1, durationUnit: 'days', roleId: '', isShared: false, isMilestone: false });
     setDialogOpen(true);
   };
@@ -236,11 +256,29 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
     }
   };
 
-  const groupedTasks = tasks.reduce((acc: any, task: any) => {
-    if (!acc[task.stageName]) acc[task.stageName] = [];
-    acc[task.stageName].push(task);
-    return acc;
-  }, {});
+  const groupedTasks = React.useMemo(() => {
+    const map = tasks.reduce((acc: any, task: any) => {
+      const stage = task.stageName || '1 – IDEA';
+      if (!acc[stage]) acc[stage] = [];
+      acc[stage].push(task);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    const stageOrderMap = new Map<string, number>();
+    npdiStages.forEach((s, idx) => {
+      stageOrderMap.set(s.name, s.stage_order ?? (idx * 10));
+      if (s.stage_name) stageOrderMap.set(s.stage_name, s.stage_order ?? (idx * 10));
+    });
+
+    const sortedEntries = Object.entries(map).sort(([a], [b]) => {
+      const orderA = stageOrderMap.get(a) ?? 999;
+      const orderB = stageOrderMap.get(b) ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
+
+    return Object.fromEntries(sortedEntries);
+  }, [tasks, npdiStages]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
@@ -438,7 +476,7 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                       {stageTasks.map((task: any) => (
                         <TaskTemplateRow key={task.id} task={task} allFlatTasks={allFlatTasks} allRoles={allRoles}
-                          existingStageNames={existingStageNames} templateId={template.id} scheduleMap={scheduleMap}
+                          existingStageNames={existingStageNames} availableStages={npdiStages} templateId={template.id} scheduleMap={scheduleMap}
                           onDelete={handleDeleteTask} onAddChild={openDialogForChild} depth={0}
                           onDragStart={handleDragStart} onDragEnter={handleDragEnter} onRefresh={onRefresh} />
                       ))}
@@ -532,24 +570,80 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
         </svg>
       )}
 
-      {/* ── New Stage Name Dialog ── */}
+      {/* ── New Stage Dialog ── */}
       {newStageOpen && (
         <div className="template-dialog-backdrop" onClick={() => setNewStageOpen(false)}>
-          <div className="template-dialog" style={{ width: '360px' }} onClick={e => e.stopPropagation()}>
+          <div className="template-dialog" style={{ width: '400px' }} onClick={e => e.stopPropagation()}>
             <div className="template-dialog-header">
-              <div><div className="template-dialog-title">Nueva Etapa</div>
-                <div className="template-dialog-subtitle">Ingresa el nombre para la nueva etapa</div></div>
+              <div>
+                <div className="template-dialog-title">Añadir Etapa NPDI</div>
+                <div className="template-dialog-subtitle">Selecciona una etapa del árbol estandarizado o añade una personalizada</div>
+              </div>
               <button className="btn-icon" onClick={() => setNewStageOpen(false)}><X size={18} /></button>
             </div>
-            <div>
-              <label className="template-form-label">Nombre de la Etapa</label>
-              <input className="input" value={newStageName} onChange={e => setNewStageName(e.target.value)}
-                placeholder="Ej: 3 - DESARROLLO" autoFocus
-                onKeyDown={e => { if (e.key === 'Enter') confirmNewStage(); }} />
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              {!isCustomStage ? (
+                <div>
+                  <label className="template-form-label">Etapa Estandarizada (Árbol NPDI)</label>
+                  <select 
+                    className="input" 
+                    value={selectedPresetStage} 
+                    onChange={e => {
+                      if (e.target.value === '__custom__') {
+                        setIsCustomStage(true);
+                        setNewStageName('');
+                      } else {
+                        setSelectedPresetStage(e.target.value);
+                      }
+                    }}
+                    autoFocus
+                  >
+                    {npdiStages.map(s => {
+                      const isUsed = existingStageNames.includes(s.name) || existingStageNames.includes(s.stage_name);
+                      return (
+                        <option key={s.name} value={s.stage_name || s.name}>
+                          {s.stage_name || s.name} {isUsed ? '(Ya en plantilla)' : ''}
+                        </option>
+                      );
+                    })}
+                    <option value="__custom__">+ Otra etapa (Personalizada)...</option>
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <label className="template-form-label" style={{ marginBottom: 0 }}>Nueva Etapa Personalizada</label>
+                    <button 
+                      type="button" 
+                      onClick={() => setIsCustomStage(false)} 
+                      style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      ← Volver a catálogo
+                    </button>
+                  </div>
+                  <input 
+                    className="input" 
+                    value={newStageName} 
+                    onChange={e => setNewStageName(e.target.value)}
+                    placeholder="Ej: 3.1 - Formulación Especial" 
+                    autoFocus
+                    onKeyDown={e => { if (e.key === 'Enter') confirmNewStage(); }} 
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Se registrará automáticamente en el Árbol de Etapas NPDI.
+                  </div>
+                </div>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+
+            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
               <button className="btn btn-ghost" onClick={() => setNewStageOpen(false)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={confirmNewStage} disabled={!newStageName.trim()}>
+              <button 
+                className="btn btn-primary" 
+                onClick={confirmNewStage} 
+                disabled={isCustomStage ? !newStageName.trim() : !selectedPresetStage}
+              >
                 Continuar <ChevronRight size={14} />
               </button>
             </div>
@@ -574,6 +668,23 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
             </div>
 
             <form onSubmit={handleAddTask} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <div>
+                <label className="template-form-label">Etapa NPDI</label>
+                <select 
+                  className="input" 
+                  value={dialogContext.stageName} 
+                  onChange={e => setDialogContext(prev => ({ ...prev, stageName: e.target.value }))}
+                >
+                  {npdiStages && npdiStages.length > 0 ? (
+                    npdiStages.map(s => (
+                      <option key={s.name} value={s.stage_name || s.name}>{s.stage_name || s.name}</option>
+                    ))
+                  ) : (
+                    <option value={dialogContext.stageName}>{dialogContext.stageName}</option>
+                  )}
+                </select>
+              </div>
+
               <div>
                 <label className="template-form-label">Nombre de la Tarea</label>
                 <input className="input" value={newTask.name} onChange={e => setNewTask({...newTask, name: e.target.value})}

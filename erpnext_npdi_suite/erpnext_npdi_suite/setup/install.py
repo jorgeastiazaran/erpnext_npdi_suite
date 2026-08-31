@@ -17,24 +17,92 @@ def after_install():
     ensure_kg_uom()
     _create_custom_fields_idempotent(get_custom_fields())
     setup_property_setters()
+    setup_default_npdi_stages()
 
 
 def _create_custom_fields_idempotent(custom_fields_map):
     """
-    Calls create_custom_fields() only for fields that do not yet exist.
-    Makes the installer safe to run on both fresh and partially-migrated sites.
+    Calls create_custom_fields() for new fields, and updates existing custom fields
+    if fieldtype or options changed.
     """
-    filtered = {}
+    to_create = {}
     for dt, fields in custom_fields_map.items():
-        missing = [
-            f for f in fields
-            if not frappe.db.exists("Custom Field", {"dt": dt, "fieldname": f["fieldname"]})
-        ]
+        missing = []
+        for f in fields:
+            cf_name = frappe.db.get_value("Custom Field", {"dt": dt, "fieldname": f["fieldname"]})
+            if not cf_name:
+                missing.append(f)
+            else:
+                # Update existing if fieldtype/options changed
+                cf = frappe.get_doc("Custom Field", cf_name)
+                updated = False
+                if f.get("fieldtype") and cf.fieldtype != f["fieldtype"]:
+                    cf.fieldtype = f["fieldtype"]
+                    updated = True
+                if f.get("options") and cf.options != f["options"]:
+                    cf.options = f["options"]
+                    updated = True
+                if updated:
+                    cf.save(ignore_permissions=True)
         if missing:
-            filtered[dt] = missing
+            to_create[dt] = missing
 
-    if filtered:
-        create_custom_fields(filtered, ignore_validate=True)
+    if to_create:
+        create_custom_fields(to_create, ignore_validate=True)
+
+def setup_default_npdi_stages():
+    """
+    Creates standard NPDI Stage tree documents and migrates any existing
+    stage strings from Project Template Task and Task to ensure consistency.
+    """
+    # 1. Standard Stages
+    standard_stages = [
+        {"stage_name": "1 – IDEA", "stage_order": 10, "color": "#4f8cff", "description": "Etapa de ideación y recopilación de oportunidades."},
+        {"stage_name": "2 – CONCEPTO", "stage_order": 20, "color": "#f59e0b", "description": "Definición y viabilidad del concepto de producto."},
+        {"stage_name": "3 – DESARROLLO", "stage_order": 30, "color": "#22c55e", "description": "Desarrollo técnico, formulación y empaque."},
+        {"stage_name": "4 – LANZAMIENTO", "stage_order": 40, "color": "#a855f7", "description": "Producción piloto, escalamiento y lanzamiento comercial."},
+        {"stage_name": "5 – POST-LANZAMIENTO", "stage_order": 50, "color": "#14b8a6", "description": "Evaluación post-lanzamiento y seguimiento de desempeño."}
+    ]
+
+    for st in standard_stages:
+        if not frappe.db.exists("NPDI Stage", st["stage_name"]):
+            try:
+                doc = frappe.get_doc({
+                    "doctype": "NPDI Stage",
+                    "stage_name": st["stage_name"],
+                    "stage_order": st["stage_order"],
+                    "color": st["color"],
+                    "description": st["description"],
+                    "is_group": 0
+                })
+                doc.insert(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(f"Error seeding NPDI Stage {st['stage_name']}: {e}", "setup_default_npdi_stages")
+
+    # 2. Migrate existing distinct stage names from Task and Project Template Task
+    try:
+        existing_template_stages = frappe.db.sql_list(
+            """SELECT DISTINCT npdi_stage_name FROM `tabProject Template Task` WHERE IFNULL(npdi_stage_name, '') != ''"""
+        )
+        existing_task_stages = frappe.db.sql_list(
+            """SELECT DISTINCT npdi_stage_name FROM `tabTask` WHERE IFNULL(npdi_stage_name, '') != ''"""
+        )
+        all_existing = set(existing_template_stages + existing_task_stages)
+        for stage_str in all_existing:
+            stage_str = stage_str.strip()
+            if stage_str and not frappe.db.exists("NPDI Stage", stage_str):
+                try:
+                    doc = frappe.get_doc({
+                        "doctype": "NPDI Stage",
+                        "stage_name": stage_str,
+                        "is_group": 0,
+                        "stage_order": 100
+                    })
+                    doc.insert(ignore_permissions=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 def setup_property_setters():
     if not frappe.db.exists("Property Setter", {"doc_type": "Task Depends On", "field_name": "subject", "property": "fetch_from"}):
@@ -166,7 +234,8 @@ def get_custom_fields():
             {
                 "fieldname": "npdi_stage_name",
                 "label": "Etapa NPDI",
-                "fieldtype": "Data",
+                "fieldtype": "Link",
+                "options": "NPDI Stage",
                 "insert_after": "task"
             },
             {
@@ -336,7 +405,8 @@ def get_custom_fields():
             {
                 "fieldname": "npdi_stage_name",
                 "label": "Etapa NPDI",
-                "fieldtype": "Data",
+                "fieldtype": "Link",
+                "options": "NPDI Stage",
                 "insert_after": "npdi_attributes_section"
             },
             {

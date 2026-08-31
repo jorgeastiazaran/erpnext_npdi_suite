@@ -531,6 +531,24 @@ def get_template_editor_data(template):
 
 
 @frappe.whitelist()
+def get_npdi_stages():
+    """
+    Returns all active NPDI stages in hierarchical order (stage_order asc, lft asc, name asc).
+    """
+    try:
+        stages = frappe.get_all(
+            "NPDI Stage",
+            fields=["name", "stage_name", "parent_npdi_stage", "is_group", "stage_order", "color", "description", "disabled"],
+            filters={"disabled": 0},
+            order_by="stage_order asc, lft asc, name asc"
+        )
+        return {"success": True, "stages": stages}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_npdi_stages")
+        return {"success": False, "error": str(e), "stages": []}
+
+
+@frappe.whitelist()
 def upsert_template_task(template, task_data):
     """
     Create or update a template task row + its linked Task stub.
@@ -551,8 +569,19 @@ def upsert_template_task(template, task_data):
         module_raw = (task_data.get("module") or task_data.get("npdi_module") or "core").lower()
         module_val = module_map.get(module_raw, "Core")
         
-        # Stage name
-        stage_name = task_data.get("stageName") or task_data.get("npdi_stage_name") or "General"
+        # Stage name (Linked to NPDI Stage)
+        stage_name = task_data.get("stageName") or task_data.get("npdi_stage_name") or "1 – IDEA"
+        stage_name = stage_name.strip()
+        if stage_name and not frappe.db.exists("NPDI Stage", stage_name):
+            try:
+                frappe.get_doc({
+                    "doctype": "NPDI Stage",
+                    "stage_name": stage_name,
+                    "is_group": 0,
+                    "stage_order": 100
+                }).insert(ignore_permissions=True)
+            except Exception:
+                pass
         
         # Role
         role_id = task_data.get("roleId") or task_data.get("npdi_responsible_role") or ""

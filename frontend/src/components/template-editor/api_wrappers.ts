@@ -80,3 +80,27 @@ export const removeStageTemplateDependency = async (templateId: string, stageNam
     });
   });
 };
+
+export const getNPDIStages = async () => {
+  return new Promise<{ success: boolean; stages: Array<{ name: string; stage_name: string; is_group?: number; parent_npdi_stage?: string; color?: string; stage_order?: number }> }>((resolve) => {
+    // @ts-ignore
+    if (!window.frappe) {
+      return resolve({
+        success: true,
+        stages: [
+          { name: "1 – IDEA", stage_name: "1 – IDEA", color: "#4f8cff", stage_order: 10 },
+          { name: "2 – CONCEPTO", stage_name: "2 – CONCEPTO", color: "#f59e0b", stage_order: 20 },
+          { name: "3 – DESARROLLO", stage_name: "3 – DESARROLLO", color: "#22c55e", stage_order: 30 },
+          { name: "4 – LANZAMIENTO", stage_name: "4 – LANZAMIENTO", color: "#a855f7", stage_order: 40 },
+          { name: "5 – POST-LANZAMIENTO", stage_name: "5 – POST-LANZAMIENTO", color: "#14b8a6", stage_order: 50 },
+        ]
+      });
+    }
+    // @ts-ignore
+    frappe.call({
+      method: "erpnext_npdi_suite.api.get_npdi_stages",
+      callback: (r: any) => resolve(r.message || { success: false, stages: [] })
+    });
+  });
+};
+

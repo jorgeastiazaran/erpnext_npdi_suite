@@ -27,8 +27,8 @@ function daysToDurationInput(days: number, unit: string): number {
   return Math.round(days / (u?.multiplier ?? 1));
 }
 
-export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existingStageNames, templateId, scheduleMap, onDelete, onAddChild, depth, onDragStart, onDragEnter, onDrop, onRefresh }: {
-  task: any; allFlatTasks: any[]; allRoles: any[]; existingStageNames: string[];
+export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existingStageNames, availableStages, templateId, scheduleMap, onDelete, onAddChild, depth, onDragStart, onDragEnter, onDrop, onRefresh }: {
+  task: any; allFlatTasks: any[]; allRoles: any[]; existingStageNames: string[]; availableStages?: any[];
   templateId: string; scheduleMap: Map<string, {startDay: number, endDay: number, slack: number, isCriticalPath: boolean}>; onDelete: (id: string) => void; onAddChild: (parentTask: any) => void; depth: number;
   onDragStart?: (taskId: string, e: React.MouseEvent, coords: {x: number, y: number}) => void;
   onDragEnter?: (taskId: string) => void;
@@ -206,6 +206,19 @@ export default function TaskTemplateRow({ task, allFlatTasks, allRoles, existing
                 </div>
               </div>
               <div className="template-edit-row">
+                <div style={{ flex: 1 }}><label className="template-form-label">Etapa NPDI</label>
+                  <select className="input" value={editData.stageName} onChange={e => setEditData({...editData, stageName: e.target.value})}>
+                    {availableStages && availableStages.length > 0 ? (
+                      availableStages.map((s: any) => (
+                        <option key={s.name} value={s.name}>{s.stage_name || s.name}</option>
+                      ))
+                    ) : (
+                      existingStageNames.map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
                 <div style={{ flex: 1 }}><label className="template-form-label">Rol</label>
                   <select className="input" value={editData.roleId} onChange={e => setEditData({...editData, roleId: e.target.value})}>
                     <option value="">Sin rol</option>
