@@ -2031,3 +2031,18 @@ def create_project_from_template(project_name, template_name, start_date, owner=
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "create_project_from_template")
         return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def sync_task_stage_link_field():
+    """
+    Sincroniza y fuerza que el campo 'npdi_stage_name' (Etapa NPDI) en Task
+    y Project Template Task sea de tipo Link hacia 'NPDI Stage'.
+    """
+    from erpnext_npdi_suite.erpnext_npdi_suite.setup.install import convert_task_stage_field_to_link
+    convert_task_stage_field_to_link()
+    return {
+        "success": True,
+        "message": "Campo 'Etapa NPDI' en Task y Project Template Task actualizado como Link a 'NPDI Stage'."
+    }
+

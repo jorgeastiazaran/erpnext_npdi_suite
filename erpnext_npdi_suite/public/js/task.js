@@ -1,4 +1,14 @@
 frappe.ui.form.on('Task', {
+	setup: function(frm) {
+		frm.set_query('npdi_stage_name', function() {
+			return {
+				filters: {
+					'disabled': 0
+				}
+			};
+		});
+	},
+
 	onload: function(frm) {
 		// Use window.npdi_subtask_inheritance to pre-populate custom/date fields and child tables
 		if (frm.is_new() && window.npdi_subtask_inheritance) {

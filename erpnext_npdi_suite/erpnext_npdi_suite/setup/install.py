@@ -11,13 +11,51 @@ def ensure_kg_uom():
 
 def after_install():
     """
-    Gancho ejecutado tras la instalación de la app.
+    Gancho ejecutado tras la instalación o migración de la app.
     Idempotente: seguro de ejecutar múltiples veces sin errores DuplicateEntry.
     """
     ensure_kg_uom()
     _create_custom_fields_idempotent(get_custom_fields())
     setup_property_setters()
     setup_default_npdi_stages()
+    convert_task_stage_field_to_link()
+
+
+def convert_task_stage_field_to_link():
+    """
+    Garantiza de forma explícita que el campo personalizado 'npdi_stage_name' (Etapa NPDI)
+    en Task y Project Template Task esté configurado como tipo Link hacia 'NPDI Stage',
+    actualizando cualquier definición previa (ej. Data) y refrescando la caché.
+    """
+    setup_default_npdi_stages()
+    for dt in ["Task", "Project Template Task"]:
+        cf_name = frappe.db.get_value("Custom Field", {"dt": dt, "fieldname": "npdi_stage_name"})
+        if cf_name:
+            cf = frappe.get_doc("Custom Field", cf_name)
+            updated = False
+            if cf.fieldtype != "Link":
+                cf.fieldtype = "Link"
+                updated = True
+            if cf.options != "NPDI Stage":
+                cf.options = "NPDI Stage"
+                updated = True
+            if cf.label != "Etapa NPDI":
+                cf.label = "Etapa NPDI"
+                updated = True
+            if updated:
+                cf.save(ignore_permissions=True)
+                frappe.db.commit()
+        else:
+            create_custom_fields({
+                dt: [{
+                    "fieldname": "npdi_stage_name",
+                    "label": "Etapa NPDI",
+                    "fieldtype": "Link",
+                    "options": "NPDI Stage",
+                    "insert_after": "npdi_attributes_section" if dt == "Task" else "task"
+                }]
+            }, ignore_validate=True)
+        frappe.clear_cache(doctype=dt)
 
 
 def _create_custom_fields_idempotent(custom_fields_map):

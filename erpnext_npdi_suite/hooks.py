@@ -9,8 +9,9 @@ app_color = "#2E7D32"
 app_email = "tecnofoodmx@gmail.com"
 app_license = "MIT"
 
-# Hook disparado al instalar la app en una instancia
+# Hook disparado al instalar o migrar la app en una instancia
 after_install = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.after_install"
+after_migrate = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.after_install"
 # Hook disparado antes de remover la app — limpia Custom Fields y Property Setters
 before_uninstall = "erpnext_npdi_suite.erpnext_npdi_suite.setup.install.before_uninstall"
 
