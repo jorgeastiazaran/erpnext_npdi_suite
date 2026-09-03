@@ -203,14 +203,19 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
 
   // Open dialog for new stage
   const openNewStageDialog = () => {
+    getNPDIStages().then(res => {
+      if (res.success && res.stages && res.stages.length > 0) {
+        setNpdiStages(res.stages);
+        const firstUnused = res.stages.find((s: any) => !existingStageNames.includes(s.name) && !existingStageNames.includes(s.stage_name));
+        setSelectedPresetStage(firstUnused ? (firstUnused.name || firstUnused.stage_name) : (res.stages[0]?.name || '1 – IDEA'));
+      }
+    });
     setNewStageOpen(true);
-    setNewStageName('');
-    setIsCustomStage(false);
     const firstUnused = npdiStages.find(s => !existingStageNames.includes(s.name) && !existingStageNames.includes(s.stage_name));
-    setSelectedPresetStage(firstUnused ? (firstUnused.stage_name || firstUnused.name) : (npdiStages[0]?.stage_name || npdiStages[0]?.name || '1 – IDEA'));
+    setSelectedPresetStage(firstUnused ? (firstUnused.name || firstUnused.stage_name) : (npdiStages[0]?.name || '1 – IDEA'));
   };
   const confirmNewStage = () => {
-    const finalStage = (isCustomStage ? newStageName : selectedPresetStage).trim();
+    const finalStage = selectedPresetStage.trim();
     if (!finalStage) return;
     setNewStageOpen(false);
     setDialogContext({ stageName: finalStage, parentId: null, roleId: '', isShared: false });
@@ -570,79 +575,68 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
         </svg>
       )}
 
-      {/* ── New Stage Dialog ── */}
+      {/* ── New Stage Dialog (NPDI Stage Link) ── */}
       {newStageOpen && (
         <div className="template-dialog-backdrop" onClick={() => setNewStageOpen(false)}>
-          <div className="template-dialog" style={{ width: '400px' }} onClick={e => e.stopPropagation()}>
+          <div className="template-dialog" style={{ width: '420px' }} onClick={e => e.stopPropagation()}>
             <div className="template-dialog-header">
               <div>
-                <div className="template-dialog-title">Añadir Etapa NPDI</div>
-                <div className="template-dialog-subtitle">Selecciona una etapa del árbol estandarizado o añade una personalizada</div>
+                <div className="template-dialog-title">Añadir Etapa a la Plantilla</div>
+                <div className="template-dialog-subtitle">Selecciona una Etapa NPDI existente para incorporar a esta plantilla</div>
               </div>
               <button className="btn-icon" onClick={() => setNewStageOpen(false)}><X size={18} /></button>
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-              {!isCustomStage ? (
-                <div>
-                  <label className="template-form-label">Etapa Estandarizada (Árbol NPDI)</label>
-                  <select 
-                    className="input" 
-                    value={selectedPresetStage} 
-                    onChange={e => {
-                      if (e.target.value === '__custom__') {
-                        setIsCustomStage(true);
-                        setNewStageName('');
-                      } else {
-                        setSelectedPresetStage(e.target.value);
-                      }
-                    }}
-                    autoFocus
-                  >
-                    {npdiStages.map(s => {
-                      const isUsed = existingStageNames.includes(s.name) || existingStageNames.includes(s.stage_name);
+              <div>
+                <label className="template-form-label">Etapa NPDI (Link a NPDI Stage)</label>
+                <select 
+                  className="input" 
+                  value={selectedPresetStage} 
+                  onChange={e => setSelectedPresetStage(e.target.value)}
+                  autoFocus
+                >
+                  {npdiStages.length === 0 ? (
+                    <option value="">Cargando etapas...</option>
+                  ) : (
+                    npdiStages.map(s => {
+                      const stageKey = s.name;
+                      const isUsed = existingStageNames.includes(stageKey);
                       return (
-                        <option key={s.name} value={s.stage_name || s.name}>
-                          {s.stage_name || s.name} {isUsed ? '(Ya en plantilla)' : ''}
+                        <option key={stageKey} value={stageKey}>
+                          {stageKey} {isUsed ? '— (Ya agregada en plantilla)' : ''}
                         </option>
                       );
-                    })}
-                    <option value="__custom__">+ Otra etapa (Personalizada)...</option>
-                  </select>
+                    })
+                  )}
+                </select>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    DocType: <strong>NPDI Stage</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if ((window as any).frappe?.new_doc) {
+                        (window as any).frappe.new_doc('NPDI Stage');
+                      } else {
+                        window.open('/app/npdi-stage', '_blank');
+                      }
+                    }}
+                    style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    + Crear nueva en NPDI Stage
+                  </button>
                 </div>
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <label className="template-form-label" style={{ marginBottom: 0 }}>Nueva Etapa Personalizada</label>
-                    <button 
-                      type="button" 
-                      onClick={() => setIsCustomStage(false)} 
-                      style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}
-                    >
-                      ← Volver a catálogo
-                    </button>
-                  </div>
-                  <input 
-                    className="input" 
-                    value={newStageName} 
-                    onChange={e => setNewStageName(e.target.value)}
-                    placeholder="Ej: 3.1 - Formulación Especial" 
-                    autoFocus
-                    onKeyDown={e => { if (e.key === 'Enter') confirmNewStage(); }} 
-                  />
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Se registrará automáticamente en el Árbol de Etapas NPDI.
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
               <button className="btn btn-ghost" onClick={() => setNewStageOpen(false)}>Cancelar</button>
               <button 
                 className="btn btn-primary" 
                 onClick={confirmNewStage} 
-                disabled={isCustomStage ? !newStageName.trim() : !selectedPresetStage}
+                disabled={!selectedPresetStage}
               >
                 Continuar <ChevronRight size={14} />
               </button>
