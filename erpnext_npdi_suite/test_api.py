@@ -1,4 +1,6 @@
-import frappe; def test():
+import frappe
+
+def test():
     frappe.init(site="localhost")
     frappe.connect()
     doc = frappe.get_doc({"doctype": "Project Template", "name": "Template Test 123", "project_type": "Internal"})

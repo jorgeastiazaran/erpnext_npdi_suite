@@ -44,4 +44,7 @@ def run():
                 engine._backward_pass(t, visited)
                 
             f.write("\nTasks Float & Criticality:\n")
-            f.write(f"{Task
+            for t in engine.tasks:
+                f.write(f"Task: {t}\n")
+        except Exception as e:
+            f.write(traceback.format_exc())
