@@ -25,26 +25,19 @@ def convert_task_stage_field_to_link():
     """
     Garantiza de forma explícita que el campo personalizado 'npdi_stage_name' (Etapa NPDI)
     en Task y Project Template Task esté configurado como tipo Link hacia 'NPDI Stage',
-    actualizando cualquier definición previa (ej. Data) y refrescando la caché.
+    actualizando cualquier definición previa (ej. Data) mediante db.set_value para
+    evitar la restricción allow_fieldtype_change de Frappe, y refrescando la caché.
     """
     setup_default_npdi_stages()
     for dt in ["Task", "Project Template Task"]:
         cf_name = frappe.db.get_value("Custom Field", {"dt": dt, "fieldname": "npdi_stage_name"})
         if cf_name:
-            cf = frappe.get_doc("Custom Field", cf_name)
-            updated = False
-            if cf.fieldtype != "Link":
-                cf.fieldtype = "Link"
-                updated = True
-            if cf.options != "NPDI Stage":
-                cf.options = "NPDI Stage"
-                updated = True
-            if cf.label != "Etapa NPDI":
-                cf.label = "Etapa NPDI"
-                updated = True
-            if updated:
-                cf.save(ignore_permissions=True)
-                frappe.db.commit()
+            frappe.db.set_value("Custom Field", cf_name, {
+                "fieldtype": "Link",
+                "options": "NPDI Stage",
+                "label": "Etapa NPDI"
+            })
+            frappe.db.commit()
         else:
             create_custom_fields({
                 dt: [{
@@ -61,7 +54,8 @@ def convert_task_stage_field_to_link():
 def _create_custom_fields_idempotent(custom_fields_map):
     """
     Calls create_custom_fields() for new fields, and updates existing custom fields
-    if fieldtype or options changed.
+    if fieldtype or options changed. Uses frappe.db.set_value to avoid
+    CustomField.validate fieldtype change exceptions.
     """
     to_create = {}
     for dt, fields in custom_fields_map.items():
@@ -71,17 +65,18 @@ def _create_custom_fields_idempotent(custom_fields_map):
             if not cf_name:
                 missing.append(f)
             else:
-                # Update existing if fieldtype/options changed
-                cf = frappe.get_doc("Custom Field", cf_name)
-                updated = False
-                if f.get("fieldtype") and cf.fieldtype != f["fieldtype"]:
-                    cf.fieldtype = f["fieldtype"]
-                    updated = True
-                if f.get("options") and cf.options != f["options"]:
-                    cf.options = f["options"]
-                    updated = True
-                if updated:
-                    cf.save(ignore_permissions=True)
+                updates = {}
+                cf_data = frappe.db.get_value("Custom Field", cf_name, ["fieldtype", "options", "label"], as_dict=True)
+                if cf_data:
+                    if f.get("fieldtype") and cf_data.fieldtype != f["fieldtype"]:
+                        updates["fieldtype"] = f["fieldtype"]
+                    if f.get("options") and cf_data.options != f["options"]:
+                        updates["options"] = f["options"]
+                    if f.get("label") and cf_data.label != f["label"]:
+                        updates["label"] = f["label"]
+                    if updates:
+                        frappe.db.set_value("Custom Field", cf_name, updates)
+                        frappe.db.commit()
         if missing:
             to_create[dt] = missing
 
