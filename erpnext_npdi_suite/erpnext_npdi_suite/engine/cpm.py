@@ -140,6 +140,11 @@ class CPMEngine:
         for task_name in start_tasks:
             self._forward_pass(task_name)
 
+        # Pasada de seguridad para cualquier tarea aislada o en ciclos cerrados
+        for task_name in self.tasks:
+            if task_name not in self.es:
+                self._forward_pass(task_name)
+
         # Pasada hacia atrás (LS / LF)
         # Un nodo es verdaderamente terminal si ni él ni ninguno de sus padres tiene sucesores.
         def has_any_successor(task_name):
@@ -242,9 +247,18 @@ class CPMEngine:
         else:
             return 24.0 # 1 día por defecto
 
-    def _forward_pass(self, task_name):
+    def _forward_pass(self, task_name, visiting=None):
         if task_name in self.es:
             return
+
+        if visiting is None:
+            visiting = set()
+
+        if task_name in visiting:
+            # Ciclo detectado: romper recursión circular para evitar timeout
+            return
+
+        visiting.add(task_name)
 
         doc = self.tasks[task_name]
         
@@ -254,7 +268,9 @@ class CPMEngine:
             self.es[task_name] = get_datetime(doc.exp_start_date or now_datetime())
             self.ef[task_name] = get_datetime(doc.completed_on or doc.exp_end_date or now_datetime())
             for succ in self.successors.get(task_name, []):
-                self._forward_pass(succ)
+                if succ not in visiting:
+                    self._forward_pass(succ, visiting)
+            visiting.remove(task_name)
             return
         
         # Rollup para tareas padre
@@ -262,7 +278,8 @@ class CPMEngine:
             children = self.children.get(task_name, [])
             if children:
                 for child in children:
-                    self._forward_pass(child)
+                    if child not in visiting:
+                        self._forward_pass(child, visiting)
                 valid_es = [self.es[c] for c in children if c in self.es]
                 valid_ef = [self.ef[c] for c in children if c in self.ef]
                 self.es[task_name] = min(valid_es) if valid_es else now_datetime()
@@ -272,7 +289,9 @@ class CPMEngine:
                 self.ef[task_name] = self.es[task_name]
                 
             for succ in self.successors.get(task_name, []):
-                self._forward_pass(succ)
+                if succ not in visiting:
+                    self._forward_pass(succ, visiting)
+            visiting.remove(task_name)
             return
 
         if doc.get("npdi_cpm_manual_dates") and doc.get("npdi_manual_start"):
@@ -285,7 +304,8 @@ class CPMEngine:
                 self.es[task_name] = get_datetime(start_base)
             else:
                 for p in preds:
-                    self._forward_pass(p)
+                    if p not in visiting:
+                        self._forward_pass(p, visiting)
                 valid_efs = [self.ef[p] for p in preds if p in self.ef]
                 self.es[task_name] = max(valid_efs) if valid_efs else now_datetime()
 
@@ -296,7 +316,10 @@ class CPMEngine:
             self.ef[task_name] = add_to_date(self.es[task_name], hours=duration)
 
         for succ in self.successors.get(task_name, []):
-            self._forward_pass(succ)
+            if succ not in visiting:
+                self._forward_pass(succ, visiting)
+
+        visiting.remove(task_name)
 
     def _backward_pass(self, end_tasks):
         # Inicializar todos los nodos
