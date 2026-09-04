@@ -21,6 +21,7 @@ doc_events = {
     "Task": {
         "before_validate": [
             "erpnext_npdi_suite.erpnext_npdi_suite.custom.task.auto_adjust_parent_dates",
+            "erpnext_npdi_suite.erpnext_npdi_suite.custom.task.validate_task_dependencies",
             "erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_validate"
         ],
         "before_save": ["erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm.task_before_save"],

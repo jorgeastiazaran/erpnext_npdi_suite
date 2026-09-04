@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   X, Calendar, Check, Loader2, RefreshCcw, Clock, Eye,
-  LayoutTemplate, User as UserIcon, ChevronRight
+  LayoutTemplate, User as UserIcon, ChevronRight, AlertTriangle
 } from 'lucide-react';
 import { runPreviewScheduler } from '../lib/previewScheduler';
 import type { PreviewTaskInput, PreviewSchedulerResult } from '../lib/previewScheduler';
@@ -580,6 +580,29 @@ export default function ProjectCreationModal({
           >
             {schedulerResult ? (
               <React.Fragment>
+                {schedulerResult.hasCircularDependency && (
+                  <div style={{
+                    margin: '16px 16px 0 16px',
+                    padding: '14px 18px',
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #f87171',
+                    borderRadius: '8px',
+                    color: '#991b1b',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '12px'
+                  }}>
+                    <AlertTriangle size={20} style={{ flexShrink: 0, marginTop: '2px', color: '#dc2626' }} />
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '3px' }}>
+                        Referencia circular detectada en la plantilla
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#b91c1c', lineHeight: 1.4 }}>
+                        Esta plantilla contiene una o más dependencias circulares cerradas. No es posible crear el proyecto hasta que las dependencias cíclicas sean resueltas en el Diseñador de Plantillas.
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div style={{ margin: '16px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                   <thead>
@@ -723,8 +746,17 @@ export default function ProjectCreationModal({
               <button
                 className="btn btn-primary"
                 onClick={handleSubmit}
-                disabled={isSubmitting}
-                style={{ padding: '8px 24px', fontSize: '13px', display: step === 2 ? 'flex' : 'none', alignItems: 'center', gap: '6px' }}
+                disabled={isSubmitting || schedulerResult?.hasCircularDependency}
+                title={schedulerResult?.hasCircularDependency ? "No es posible crear el proyecto: la plantilla contiene dependencias circulares." : undefined}
+                style={{
+                  padding: '8px 24px',
+                  fontSize: '13px',
+                  display: step === 2 ? 'flex' : 'none',
+                  alignItems: 'center',
+                  gap: '6px',
+                  opacity: schedulerResult?.hasCircularDependency ? 0.5 : 1,
+                  cursor: schedulerResult?.hasCircularDependency ? 'not-allowed' : 'pointer',
+                }}
               >
                 {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                 Confirmar y Crear

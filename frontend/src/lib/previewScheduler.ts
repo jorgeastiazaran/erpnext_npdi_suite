@@ -30,6 +30,8 @@ export interface PreviewSchedulerResult {
   tasks: Map<string, PreviewTaskOutput>;
   estimatedEndDate: Date;
   totalDurationDays: number;
+  hasCircularDependency: boolean;
+  circularTasks: string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ function minDate(...dates: Date[]): Date {
 function topologicalSort(
   taskIds: string[],
   depsMap: Map<string, string[]>
-): string[] {
+): { sorted: string[]; hasCircularDependency: boolean; circularTaskIds: string[] } {
   const inDegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
 
@@ -94,11 +96,19 @@ function topologicalSort(
     }
   }
 
-  if (sorted.length !== taskIds.length) {
-    console.warn('PreviewScheduler: circular dependency detected, some tasks unscheduled.');
+  const hasCircularDependency = sorted.length !== taskIds.length;
+  const circularTaskIds: string[] = [];
+  if (hasCircularDependency) {
+    const sortedSet = new Set(sorted);
+    for (const id of taskIds) {
+      if (!sortedSet.has(id)) {
+        circularTaskIds.push(id);
+      }
+    }
+    console.warn('PreviewScheduler: circular dependency detected, some tasks unscheduled:', circularTaskIds);
   }
 
-  return sorted;
+  return { sorted, hasCircularDependency, circularTaskIds };
 }
 
 // ─── Main Scheduler ───────────────────────────────────────────────────────────
@@ -189,7 +199,7 @@ export function runPreviewScheduler(
 
   // ── Forward Pass ──────────────────────────────────────────────────────────
 
-  const sorted = topologicalSort(leafTaskIds, depsMap);
+  const { sorted, hasCircularDependency, circularTaskIds } = topologicalSort(leafTaskIds, depsMap);
 
   const earlyStart = new Map<string, Date>();
   const earlyFinish = new Map<string, Date>();
@@ -273,5 +283,11 @@ export function runPreviewScheduler(
 
   const totalDurationDays = diffDays(estimatedEndDate, normalizedStart);
 
-  return { tasks: results, estimatedEndDate, totalDurationDays };
+  return {
+    tasks: results,
+    estimatedEndDate,
+    totalDurationDays,
+    hasCircularDependency,
+    circularTasks: circularTaskIds,
+  };
 }

@@ -297,14 +297,65 @@ def recalculate_cpm(project):
 def add_task_dependency(task_id, depends_on):
     """
     Add a dependency relation: task_id depends on depends_on.
+    Validates against self-dependency, parent-child loops, and circular references.
     """
     from erpnext_npdi_suite.erpnext_npdi_suite.engine.cpm import CPMEngine
+    from collections import defaultdict, deque
 
     try:
+        if not task_id or not depends_on:
+            return {"success": False, "error": "Faltan parámetros de tarea."}
+
+        if task_id == depends_on:
+            return {"success": False, "error": "Una tarea no puede depender de sí misma."}
+
         task = frappe.get_doc('Task', task_id)
         task.check_permission('write')
-        exists = any(d.task == depends_on for d in task.depends_on)
+
+        if task.parent_task and task.parent_task == depends_on:
+            return {"success": False, "error": "Una tarea no puede depender de su tarea padre."}
+
+        # Check if depends_on is a child of task_id
+        is_child = frappe.db.get_value("Task", depends_on, "parent_task") == task_id
+        if is_child:
+            return {"success": False, "error": "Una tarea padre no puede depender de su subtarea."}
+
+        exists = any(d.task == depends_on for d in (task.depends_on or []))
         if not exists:
+            # Cycle detection within project tasks
+            if task.project:
+                rows = frappe.db.sql("""
+                    SELECT parent, task FROM `tabTask Depends On`
+                    WHERE parent IN (SELECT name FROM `tabTask` WHERE project = %s)
+                """, (task.project,), as_dict=True)
+
+                adj = defaultdict(list)
+                for r in rows:
+                    adj[r.parent].append(r.task)
+
+                # Check if depends_on can already reach task_id
+                queue = deque([[depends_on]])
+                visited = {depends_on}
+                cycle_found = None
+
+                while queue:
+                    path = queue.popleft()
+                    curr = path[-1]
+                    if curr == task_id:
+                        cycle_found = [task_id] + path
+                        break
+                    for nxt in adj.get(curr, []):
+                        if nxt not in visited:
+                            visited.add(nxt)
+                            queue.append(path + [nxt])
+
+                if cycle_found:
+                    task_names = [frappe.db.get_value("Task", t, "subject") or t for t in cycle_found]
+                    return {
+                        "success": False,
+                        "error": f"No se puede agregar la dependencia: crearía una referencia circular ({' ➔ '.join(task_names)})."
+                    }
+
             task.append('depends_on', {
                 'task': depends_on
             })
@@ -338,42 +389,143 @@ def capture_project_baseline(project_name):
 
 # ── Project Template validation hook ──────────────────────────────────────────
 
-def validate_project_template_dependencies(doc, method):
-    if not doc.get("npdi_task_dependencies"):
+def validate_project_template_dependencies(doc, method=None):
+    """
+    Validates that a Project Template has no self-dependencies,
+    no stage loops, and no circular dependencies across all dependency sources:
+    1. npdi_task_dependencies (explicit template task-to-task)
+    2. npdi_stage_dependencies (stage-to-stage and stage-to-task)
+    3. native Task Depends On on linked template task stubs
+    """
+    from collections import defaultdict
+
+    tasks = doc.get("tasks") or []
+    if not tasks:
         return
-        
-    edges = []
-    all_tasks = set()
-    for row in doc.get("npdi_task_dependencies"):
-        if row.task == row.depends_on:
-            frappe.throw("Una tarea no puede depender de sí misma.")
-        edges.append((row.task, row.depends_on))
-        all_tasks.add(row.task)
-        all_tasks.add(row.depends_on)
-        
-    # DFS Cycle Detection
-    graph = {}
-    for task, dep in edges:
-        graph.setdefault(task, []).append(dep)
 
-    state = {node: 0 for node in all_tasks}
+    # Map row names and stub names to readable titles and stages
+    task_map = {}
+    task_by_stub = {}
+    subject_map = {}
+    stage_tasks = defaultdict(list)
 
-    def dfs(node):
-        if state[node] == 1:
-            return True
-        if state[node] == 2:
-            return False
-        state[node] = 1
-        for neighbor in graph.get(node, []):
-            if dfs(neighbor):
+    for r in tasks:
+        task_map[r.name] = r
+        if r.task:
+            task_by_stub[r.task] = r.name
+        subject_map[r.name] = r.subject or r.task or r.name
+        stage = (r.get("npdi_stage_name") or "").strip()
+        if stage:
+            stage_tasks[stage].append(r.name)
+
+    # Directed graph: target -> set of predecessors it depends on
+    graph = defaultdict(set)
+
+    # 1. npdi_task_dependencies
+    for row in (doc.get("npdi_task_dependencies") or []):
+        t = row.task
+        d = row.depends_on
+        if not t or not d:
+            continue
+        if t == d:
+            task_label = subject_map.get(t, t)
+            frappe.throw(
+                frappe._("La tarea '{0}' no puede depender de sí misma.").format(task_label),
+                frappe.ValidationError
+            )
+        if t in task_map and d in task_map:
+            graph[t].add(d)
+
+    # 2. npdi_stage_dependencies
+    for row in (doc.get("npdi_stage_dependencies") or []):
+        stage = (row.get("stage") or "").strip()
+        dep_stage = (row.get("depends_on_stage") or "").strip()
+        dep_row = row.get("depends_on_row_name")
+
+        if dep_stage and stage == dep_stage:
+            frappe.throw(
+                frappe._("La etapa '{0}' no puede depender de sí misma.").format(stage),
+                frappe.ValidationError
+            )
+
+        target_tasks = stage_tasks.get(stage, [])
+        if dep_row and dep_row in task_map:
+            pred_tasks = [dep_row]
+        elif dep_stage:
+            pred_tasks = stage_tasks.get(dep_stage, [])
+        else:
+            pred_tasks = []
+
+        for t in target_tasks:
+            for p in pred_tasks:
+                if t == p:
+                    task_label = subject_map.get(t, t)
+                    frappe.throw(
+                        frappe._("La tarea '{0}' no puede depender de sí misma (generado por la etapa '{1}').").format(task_label, stage),
+                        frappe.ValidationError
+                    )
+                graph[t].add(p)
+
+    # 3. Native Task Depends On from Task stubs
+    stubs = [r.task for r in tasks if r.task]
+    if stubs:
+        native_deps = frappe.get_all(
+            "Task Depends On",
+            filters={"parent": ["in", stubs]},
+            fields=["parent", "task"]
+        )
+        for nd in native_deps:
+            t = task_by_stub.get(nd.parent)
+            d = task_by_stub.get(nd.task)
+            if t and d:
+                if t == d:
+                    task_label = subject_map.get(t, t)
+                    frappe.throw(
+                        frappe._("La tarea '{0}' no puede depender de sí misma.").format(task_label),
+                        frappe.ValidationError
+                    )
+                graph[t].add(d)
+
+    # 4. Cycle Detection using 3-color DFS with exact cycle path extraction
+    # 0 = UNVISITED, 1 = VISITING, 2 = VISITED
+    state = {}
+    path = []
+    cycle_nodes = None
+
+    def dfs(u):
+        nonlocal cycle_nodes
+        state[u] = 1
+        path.append(u)
+        for v in graph.get(u, ()):
+            if v not in task_map:
+                continue
+            if state.get(v, 0) == 1:
+                # Cycle found! Extract cycle slice from v to v
+                cycle_start_idx = path.index(v)
+                cycle_nodes = path[cycle_start_idx:] + [v]
                 return True
-        state[node] = 2
+            elif state.get(v, 0) == 0:
+                if dfs(v):
+                    return True
+        path.pop()
+        state[u] = 2
         return False
 
-    for node in all_tasks:
-        if state[node] == 0:
+    for node in task_map:
+        if state.get(node, 0) == 0:
             if dfs(node):
-                frappe.throw("Error: Las dependencias agregadas crean un ciclo circular.")
+                break
+
+    if cycle_nodes:
+        chain_labels = [subject_map.get(n, n) for n in cycle_nodes]
+        chain_str = " ➔ ".join(chain_labels)
+        template_name = doc.get("name") or doc.get("project_name") or "Plantilla"
+        frappe.throw(
+            frappe._("No se puede guardar la plantilla '{0}': Se detectó una referencia circular en las dependencias: {1}").format(
+                template_name, chain_str
+            ),
+            frappe.ValidationError
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1931,6 +2083,11 @@ def create_project_from_template(project_name, template_name, start_date, owner=
     import json as json_module
 
     try:
+        # Pre-validate Project Template dependencies before insert to avoid 504 Gateway Timeout
+        if template_name:
+            template_doc = frappe.get_doc("Project Template", template_name)
+            validate_project_template_dependencies(template_doc)
+
         # 1. Create the Project document
         project = frappe.get_doc({
             "doctype": "Project",

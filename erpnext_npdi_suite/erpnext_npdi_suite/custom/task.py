@@ -114,3 +114,85 @@ def auto_adjust_parent_dates(doc, method):
                 current_parent_name = gp
             finally:
                 adjusting.remove(this_parent)
+
+
+def validate_task_dependencies(doc, method=None):
+    """
+    Hooked to `before_validate` of Task.
+    Prevents self-dependencies, parent-child dependency loops,
+    and circular dependencies within the project.
+    """
+    deps = doc.get("depends_on") or []
+    if not deps:
+        return
+
+    # 1. Self-dependency and parent/child loop checks
+    for d in deps:
+        if not d.task:
+            continue
+        if d.task == doc.name:
+            frappe.throw(
+                frappe._("La tarea '{0}' no puede depender de sí misma.").format(doc.subject or doc.name),
+                frappe.ValidationError
+            )
+        if doc.parent_task and d.task == doc.parent_task:
+            frappe.throw(
+                frappe._("La tarea '{0}' no puede depender de su tarea padre '{1}'.").format(
+                    doc.subject or doc.name, doc.parent_task
+                ),
+                frappe.ValidationError
+            )
+        # Verify if d.task is a child of doc
+        if not doc.is_new():
+            dep_parent = frappe.db.get_value("Task", d.task, "parent_task")
+            if dep_parent == doc.name:
+                frappe.throw(
+                    frappe._("La tarea padre '{0}' no puede depender de su subtarea '{1}'.").format(
+                        doc.subject or doc.name, d.task
+                    ),
+                    frappe.ValidationError
+                )
+
+    # 2. Cycle detection within the project
+    if doc.project and not getattr(frappe.flags, "in_migrate", False):
+        from collections import defaultdict, deque
+
+        # Fetch all project dependencies except current doc's existing stored dependencies
+        rows = frappe.db.sql("""
+            SELECT parent, task FROM `tabTask Depends On`
+            WHERE parent IN (SELECT name FROM `tabTask` WHERE project = %s)
+            AND parent != %s
+        """, (doc.project, doc.name or ""), as_dict=True)
+
+        adj = defaultdict(list)
+        for r in rows:
+            adj[r.parent].append(r.task)
+
+        # For each target dependency in doc.depends_on, check if it can reach doc.name
+        for d in deps:
+            if not d.task or doc.is_new():
+                continue
+            queue = deque([[d.task]])
+            visited = {d.task}
+            cycle_found = None
+
+            while queue:
+                path = queue.popleft()
+                curr = path[-1]
+                if curr == doc.name:
+                    cycle_found = [doc.name] + path
+                    break
+                for nxt in adj.get(curr, []):
+                    if nxt not in visited:
+                        visited.add(nxt)
+                        queue.append(path + [nxt])
+
+            if cycle_found:
+                labels = [frappe.db.get_value("Task", t, "subject") or t for t in cycle_found]
+                frappe.throw(
+                    frappe._("No se puede guardar la tarea '{0}': Se detectó una referencia circular en las dependencias: {1}").format(
+                        doc.subject or doc.name, " ➔ ".join(labels)
+                    ),
+                    frappe.ValidationError
+                )
+
