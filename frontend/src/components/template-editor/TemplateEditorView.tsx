@@ -562,16 +562,30 @@ export default function TemplateEditorClient({ template, allRoles, onRefresh }: 
             zIndex: 9999
           }}
         >
+          <defs>
+            <marker
+              id="template-dep-arrowhead"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto"
+            >
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--accent, #2563eb)" />
+            </marker>
+          </defs>
           <path
             d={`M ${dragState.startCoords.x} ${dragState.startCoords.y} C ${dragState.startCoords.x + 100} ${dragState.startCoords.y}, ${dragState.currentCoords.x - 100} ${dragState.currentCoords.y}, ${dragState.currentCoords.x} ${dragState.currentCoords.y}`}
             fill="none"
-            stroke="var(--accent)"
+            stroke="var(--accent, #2563eb)"
             strokeWidth="3"
             strokeDasharray="6 6"
             className="animate-dash"
+            markerEnd="url(#template-dep-arrowhead)"
           />
-          <circle cx={dragState.startCoords.x} cy={dragState.startCoords.y} r="5" fill="var(--accent)" />
-          <circle cx={dragState.currentCoords.x} cy={dragState.currentCoords.y} r="5" fill="var(--accent)" />
+          <circle cx={dragState.startCoords.x} cy={dragState.startCoords.y} r="5" fill="var(--accent, #2563eb)" />
+          <circle cx={dragState.currentCoords.x} cy={dragState.currentCoords.y} r="5" fill="var(--accent, #2563eb)" />
         </svg>
       )}
 
