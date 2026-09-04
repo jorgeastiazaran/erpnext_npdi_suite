@@ -20,15 +20,38 @@ class CPMEngine:
 
     def load_tasks(self):
         """Carga las tareas del proyecto y mapea la red topológica y la jerarquía de grupos."""
-        task_records = frappe.get_all("Task", filters={"project": self.project_name}, fields=["name", "subject", "duration", "exp_start_date", "exp_end_date", "is_group", "parent_task"])
+        task_records = frappe.get_all(
+            "Task",
+            filters={"project": self.project_name},
+            fields=[
+                "name", "subject", "duration", "exp_start_date", "exp_end_date",
+                "is_group", "parent_task", "status", "completed_on",
+                "is_milestone", "npdi_launch_milestone", "npdi_cpm_manual_dates",
+                "npdi_manual_start", "npdi_manual_end"
+            ]
+        )
         self.children = {}
         for t in task_records:
-            doc = frappe.get_doc("Task", t.name)
+            doc = frappe._dict(t)
             self.tasks[t.name] = doc
             
             # Construye jerarquía de padres/hijos
             if doc.parent_task:
                 self.children.setdefault(doc.parent_task, []).append(t.name)
+
+        # Carga masiva de dependencias para todas las tareas en una única consulta
+        if self.tasks:
+            dep_records = frappe.get_all(
+                "Task Depends On",
+                filters={"parent": ["in", list(self.tasks.keys())]},
+                fields=["parent", "task"]
+            )
+            deps_by_parent = defaultdict(list)
+            for d in dep_records:
+                if d.task:
+                    deps_by_parent[d.parent].append(frappe._dict({"task": d.task}))
+            for t_name, doc in self.tasks.items():
+                doc["depends_on"] = deps_by_parent.get(t_name, [])
 
         # Build ancestry map to detect parent-child cycles
         ancestry = {}
@@ -185,7 +208,8 @@ class CPMEngine:
                     db_updates["status"] = doc.status
                     db_updates["completed_on"] = doc.completed_on
 
-                doc.db_set(db_updates)
+                doc.update(db_updates)
+                frappe.db.set_value("Task", task_name, db_updates, update_modified=False)
 
         # Update parent Project expected_end_date from the latest stage-gate milestone
         milestone_dates = []
@@ -359,19 +383,18 @@ def before_project_insert(doc, method):
 
 def task_before_validate(doc, method):
     if doc.flags.bypass_npdi_project_validation: return
-    """Oculta temporalmente la fecha de fin para saltarse la validación estricta de Frappe."""
+    """Evita que ERPNext aborte por validate_parent_expected_end_date durante la creación masiva."""
     if getattr(frappe.local, 'is_instantiating_project', False):
-        if doc.parent_task and doc.exp_end_date:
-            doc.custom_hidden_exp_end_date = doc.exp_end_date
-            doc.exp_end_date = None
+        if doc.parent_task:
+            parent_end = frappe.db.get_value("Task", doc.parent_task, "exp_end_date")
+            child_end = doc.exp_end_date or frappe.utils.nowdate()
+            if not parent_end or str(parent_end) < str(child_end):
+                frappe.db.set_value("Task", doc.parent_task, "exp_end_date", "2099-12-31", update_modified=False)
 
 
 def task_before_save(doc, method):
     if doc.flags.bypass_npdi_project_validation: return
-    """Restaura la fecha de fin oculta antes de guardar en la base de datos."""
-    if getattr(frappe.local, 'is_instantiating_project', False):
-        if hasattr(doc, 'custom_hidden_exp_end_date') and doc.custom_hidden_exp_end_date:
-            doc.exp_end_date = doc.custom_hidden_exp_end_date
+    pass
 
 
 def on_task_update(doc, method):
@@ -560,38 +583,84 @@ def on_project_insert(doc, method):
                     add_dep(t_task, u_task)
 
     # 3. Process native Task.depends_on from template Task records and template Task rows
+    tmpl_task_ids = [tmpl.task for tmpl in template_tasks if tmpl.task]
+    if tmpl_task_ids:
+        raw_tmpl_deps = frappe.get_all(
+            "Task Depends On",
+            filters={"parent": ["in", tmpl_task_ids]},
+            fields=["parent", "task"]
+        )
+        tmpl_deps_by_parent = defaultdict(list)
+        for d in raw_tmpl_deps:
+            tmpl_deps_by_parent[d.parent].append(d.task)
+    else:
+        tmpl_deps_by_parent = {}
+
     for tmpl in template_tasks:
         target_gen = tmpl_task_record_to_generated.get(tmpl.name)
         if not target_gen and tmpl.task:
             target_gen = tmpl_task_record_to_generated.get(tmpl.task)
         if not target_gen:
             continue
-        if tmpl.task and frappe.db.exists("Task", tmpl.task):
-            tmpl_task_doc = frappe.get_doc("Task", tmpl.task)
-            for d in (tmpl_task_doc.get("depends_on") or []):
-                if d.task:
-                    dep_gen = tmpl_task_record_to_generated.get(d.task)
-                    if dep_gen:
-                        add_dep(target_gen, dep_gen)
+        if tmpl.task and tmpl.task in tmpl_deps_by_parent:
+            for dep_task_id in tmpl_deps_by_parent[tmpl.task]:
+                dep_gen = tmpl_task_record_to_generated.get(dep_task_id)
+                if dep_gen:
+                    add_dep(target_gen, dep_gen)
 
-    # 4. Append to the actual instantiated Task documents
+    # 4. Append to the actual instantiated Task documents via high-performance bulk insert
+    existing_dep_rows = frappe.db.sql("""
+        SELECT parent, task, idx FROM `tabTask Depends On`
+        WHERE parent IN (SELECT name FROM `tabTask` WHERE project = %s)
+    """, (doc.name,), as_dict=True)
+
+    existing_deps_by_parent = defaultdict(set)
+    max_idx_by_parent = defaultdict(int)
+    for r in existing_dep_rows:
+        existing_deps_by_parent[r.parent].add(r.task)
+        if r.idx and r.idx > max_idx_by_parent[r.parent]:
+            max_idx_by_parent[r.parent] = r.idx
+
+    now_ts = frappe.utils.now()
+    session_user = frappe.session.user or "Administrator"
+
+    new_dep_records = []
     for target_task_name, depends_on_set in deps_to_append.items():
-        target_doc = frappe.get_doc("Task", target_task_name)
-        existing_dep_ids = {d.task for d in (target_doc.depends_on or [])}
-        
-        added = False
-        for dep_generated_name in depends_on_set:
-            if dep_generated_name in existing_dep_ids:
+        if not target_task_name:
+            continue
+        for dep_gen_name in depends_on_set:
+            if not dep_gen_name or dep_gen_name in existing_deps_by_parent[target_task_name]:
                 continue
-            target_doc.append("depends_on", {
-                "task": dep_generated_name,
-                "subject": generated_name_to_subject.get(dep_generated_name, ""),
-            })
-            existing_dep_ids.add(dep_generated_name)
-            added = True
-            
-        if added:
-            target_doc.save(ignore_permissions=True)
+            max_idx_by_parent[target_task_name] += 1
+            idx = max_idx_by_parent[target_task_name]
+            dep_subject = (
+                generated_name_to_subject.get(dep_gen_name)
+                or frappe.db.get_value("Task", dep_gen_name, "subject")
+                or ""
+            )
+            new_dep_records.append([
+                frappe.generate_hash(length=10),
+                now_ts,
+                now_ts,
+                session_user,
+                session_user,
+                0,
+                target_task_name,
+                "depends_on",
+                "Task",
+                idx,
+                dep_gen_name,
+                dep_subject,
+                doc.name
+            ])
+            existing_deps_by_parent[target_task_name].add(dep_gen_name)
+
+    if new_dep_records:
+        frappe.db.bulk_insert(
+            "Task Depends On",
+            fields=["name", "creation", "modified", "modified_by", "owner", "docstatus", "parent", "parentfield", "parenttype", "idx", "task", "subject", "project"],
+            values=new_dep_records
+        )
 
     # ── Populate `subject` on all Task Depends On rows for UI display ────────
     dep_rows = frappe.db.sql("""
@@ -613,6 +682,10 @@ def on_project_insert(doc, method):
             )
 
     # ── Run CPM engine once synchronously after all enrichment is complete ───
+    if getattr(frappe.flags, "defer_cpm_computation", False):
+        frappe.local.is_instantiating_project = False
+        return
+
     try:
         frappe.local.cpm_processing = True
         engine = CPMEngine(doc.name)

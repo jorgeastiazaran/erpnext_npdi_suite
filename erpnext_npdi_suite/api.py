@@ -1944,13 +1944,16 @@ def create_project_from_template(project_name, template_name, start_date, owner=
         if owner:
             project.owner = owner
 
-        # Insert triggers Frappe's native template→project task generation
-        # and our on_project_insert hook (NPDI enrichment + CPM)
-        project.insert(ignore_permissions=True)
-        frappe.db.commit()
+        # Defer CPM computation during insert to prevent duplicate calculations
+        frappe.flags.defer_cpm_computation = True
+        try:
+            # Insert triggers Frappe's native template→project task generation
+            # and our on_project_insert hook (NPDI enrichment + bulk dependencies)
+            project.insert(ignore_permissions=True)
+        finally:
+            frappe.flags.defer_cpm_computation = False
 
         # 2. Apply task overrides if provided
-        has_changes = False
         if task_overrides:
             overrides = json_module.loads(task_overrides) if isinstance(task_overrides, str) else task_overrides
 
@@ -1993,8 +1996,7 @@ def create_project_from_template(project_name, template_name, start_date, owner=
                     updates["status"] = "Cancelled"
 
                 if updates:
-                    frappe.db.set_value("Task", gen_task_name, updates)
-                    has_changes = True
+                    frappe.db.set_value("Task", gen_task_name, updates, update_modified=False)
 
         # 3. Apply role assignments (independent of task_overrides)
         if role_assignments:
@@ -2010,17 +2012,15 @@ def create_project_from_template(project_name, template_name, start_date, owner=
                     if t.npdi_responsible_role and t.npdi_responsible_role in assignments:
                         assigned_user = assignments[t.npdi_responsible_role]
                         if assigned_user:
-                            frappe.db.set_value("Task", t.name, "task_owner", assigned_user)
-                            has_changes = True
+                            frappe.db.set_value("Task", t.name, "task_owner", assigned_user, update_modified=False)
 
-        # 4. Re-run CPM after overrides
-        if has_changes:
-            frappe.local.cpm_processing = True
-            try:
-                engine = CPMEngine(project.name)
-                engine.compute()
-            finally:
-                frappe.local.cpm_processing = False
+        # 4. Run CPM engine once after all enrichments, overrides, and role assignments
+        frappe.local.cpm_processing = True
+        try:
+            engine = CPMEngine(project.name)
+            engine.compute()
+        finally:
+            frappe.local.cpm_processing = False
 
         frappe.db.commit()
 
